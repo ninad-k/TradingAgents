@@ -1,47 +1,45 @@
-import { useState, useEffect } from 'react'
-import type { DashboardStatus } from './types'
-import { subscribeToLiveUpdates, getStatus } from './api'
+import { useState, useEffect, useCallback } from 'react'
+import type { DashboardStatus, WatchlistEntry, AnalysisEvent } from './types'
+import { subscribeToLiveUpdates, getStatus, getWatchlist } from './api'
 import { Dashboard } from './components/Dashboard'
 import './App.css'
 
 function App() {
   const [status, setStatus] = useState<DashboardStatus | null>(null)
+  const [watchlistEntries, setWatchlistEntries] = useState<WatchlistEntry[]>([])
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const refreshWatchlist = useCallback(() => {
+    getWatchlist().then(setWatchlistEntries).catch(console.error)
+  }, [])
+
   useEffect(() => {
-    // Initial status fetch
     getStatus()
       .then(setStatus)
-      .catch((err) => {
-        console.error('Failed to fetch initial status:', err)
-        setError('Failed to connect to trading dashboard API')
-      })
+      .catch(() => setError('Failed to connect to trading dashboard API'))
 
-    // WebSocket subscription for live updates
+    getWatchlist()
+      .then(setWatchlistEntries)
+      .catch(console.error)
+
     let ws: WebSocket | null = null
-
     try {
       ws = subscribeToLiveUpdates(
-        (newStatus) => {
+        (newStatus: DashboardStatus, wl: WatchlistEntry[], _events: AnalysisEvent[]) => {
           setStatus(newStatus)
+          if (wl && wl.length > 0) setWatchlistEntries(wl)
           setConnected(true)
           setError(null)
         },
-        (err) => {
-          console.error('WebSocket error:', err)
-          setConnected(false)
-        }
+        () => setConnected(false)
       )
-    } catch (err) {
-      console.error('Failed to establish WebSocket connection:', err)
+    } catch {
       setError('Failed to establish real-time connection')
     }
 
     return () => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.close()
-      }
+      if (ws && ws.readyState === WebSocket.OPEN) ws.close()
     }
   }, [])
 
@@ -78,7 +76,7 @@ function App() {
       )}
 
       {status ? (
-        <Dashboard status={status} />
+        <Dashboard status={status} watchlistEntries={watchlistEntries} onWatchlistRefresh={refreshWatchlist} />
       ) : (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
           Loading dashboard...

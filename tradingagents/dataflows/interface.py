@@ -23,6 +23,7 @@ from .alpha_vantage import (
     get_global_news as get_alpha_vantage_global_news,
 )
 from .alpha_vantage_common import AlphaVantageRateLimitError
+from .tradingview import get_tradingview_data, get_tradingview_indicators
 
 # Configuration and routing logic
 from .config import get_config
@@ -63,17 +64,20 @@ TOOLS_CATEGORIES = {
 VENDOR_LIST = [
     "yfinance",
     "alpha_vantage",
+    "tradingview",
 ]
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
+        "tradingview": get_tradingview_data,
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
     },
     # technical_indicators
     "get_indicators": {
+        "tradingview": get_tradingview_indicators,
         "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
     },

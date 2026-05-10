@@ -1,19 +1,27 @@
-import type { DashboardStatus } from '../types'
+import type { DashboardStatus, WatchlistEntry } from '../types'
 import { MetricsCards } from './MetricsCards'
 import { AccountOverview } from './AccountOverview'
 import { PortfolioSummary } from './PortfolioSummary'
 import { TradeHistory } from './TradeHistory'
 import { PerformanceChart } from './PerformanceChart'
+import { WatchlistPanel } from './WatchlistPanel'
 
 interface DashboardProps {
   status: DashboardStatus
+  watchlistEntries: WatchlistEntry[]
+  onWatchlistRefresh: () => void
 }
 
-export function Dashboard({ status }: DashboardProps) {
+export function Dashboard({ status, watchlistEntries, onWatchlistRefresh }: DashboardProps) {
   return (
     <div>
       {/* Key Metrics Row */}
       <MetricsCards account={status.account} />
+
+      {/* Watchlist — prominently at the top */}
+      <div className="card" style={{ marginBottom: '24px' }}>
+        <WatchlistPanel entries={watchlistEntries} onRefresh={onWatchlistRefresh} />
+      </div>
 
       {/* Main Dashboard Grid */}
       <div className="container">

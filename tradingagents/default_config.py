@@ -50,4 +50,8 @@ DEFAULT_CONFIG = {
     # Trading mode: "paper" (demo) or "live" trading
     # Paper trading is the safe default - requires explicit "live" to trade with real money
     "trading_mode": os.getenv("TRADING_MODE", "paper").lower(),
+    # Watchlist monitoring: symbols to track and their check interval (hours)
+    # Defaults are forex/commodity pairs monitored via TradingView
+    "watchlist_enabled": os.getenv("WATCHLIST_ENABLED", "true").lower() == "true",
+    "watchlist_check_interval_seconds": int(os.getenv("WATCHLIST_CHECK_INTERVAL", "60")),
 }

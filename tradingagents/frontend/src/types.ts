@@ -59,3 +59,32 @@ export interface TradeEvent {
   timestamp: string
   data: Record<string, unknown>
 }
+
+export interface WatchlistEntry {
+  symbol: string
+  display_name: string
+  mode: 'forex' | 'commodity' | 'stock'
+  interval_hours: number
+  analysts: string[]
+  use_tradingview: boolean
+  enabled: boolean
+  last_analysis: string | null
+  last_decision: string | null
+  last_signal: string | null   // "BUY" | "SELL" | "HOLD" | null
+  latest_result?: AnalysisResult
+}
+
+export interface AnalysisResult {
+  symbol: string
+  success: boolean
+  signal: string
+  decision_text: string
+  error: string | null
+  timestamp: string
+}
+
+export interface AnalysisEvent {
+  type: string
+  data: AnalysisResult
+  timestamp: string
+}
