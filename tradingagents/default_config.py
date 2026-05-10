@@ -47,4 +47,7 @@ DEFAULT_CONFIG = {
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default
     },
+    # Trading mode: "paper" (demo) or "live" trading
+    # Paper trading is the safe default - requires explicit "live" to trade with real money
+    "trading_mode": os.getenv("TRADING_MODE", "paper").lower(),
 }

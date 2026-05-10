@@ -930,6 +930,20 @@ def run_analysis(checkpoint: bool = False):
     # First get all user selections
     selections = get_user_selections()
 
+    # Display trading mode at startup
+    from tradingagents.dataflows.config import get_config
+    app_config = get_config()
+    trading_mode = app_config.get("trading_mode", "paper")
+
+    if trading_mode == "paper":
+        trading_badge = "[green bold]✓ PAPER TRADING[/green bold]"
+        trading_msg = "Running in [bold green]PAPER TRADING MODE[/bold green] (Safe - Demo Account)"
+    else:
+        trading_badge = "[red bold]⚠ LIVE TRADING[/red bold]"
+        trading_msg = "Running in [bold red]LIVE TRADING MODE[/bold red] (Real Money!)"
+
+    console.print(Panel(trading_msg, title="Trading Mode", expand=False, style="bold"))
+
     # Create config with selected research depth
     config = DEFAULT_CONFIG.copy()
     config["max_debate_rounds"] = selections["research_depth"]
