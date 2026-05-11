@@ -47,10 +47,15 @@ function App() {
     <div className="app">
       <div className="header">
         <div>
-          <h1>📈 Trading Dashboard</h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '5px' }}>
-            Real-time trading activity and performance monitoring
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <img src="/favicon.svg" alt="ReyHedgeFund" style={{ width: '44px', height: '44px' }} />
+            <div>
+              <h1 style={{ margin: 0 }}>ReyHedgeFund</h1>
+              <p style={{ color: 'var(--text-secondary)', marginTop: '3px', fontSize: '0.85rem' }}>
+                Smart Investments · Real-time Trading Dashboard
+              </p>
+            </div>
+          </div>
         </div>
         <div className="status-indicator">
           <div className={`status-dot ${connected ? 'connected' : 'disconnected'}`}></div>
