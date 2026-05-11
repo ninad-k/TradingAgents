@@ -11,10 +11,10 @@ DEFAULT_CONFIG = {
     # the oldest resolved entries are pruned once this limit is exceeded.
     # Pending entries are never pruned. None disables rotation entirely.
     "memory_log_max_entries": None,
-    # LLM settings
-    "llm_provider": "openai",
-    "deep_think_llm": "gpt-5.4",
-    "quick_think_llm": "gpt-5.4-mini",
+    # LLM settings — defaults to local Owen (Ollama) model
+    "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),
+    "deep_think_llm": os.getenv("DEEP_THINK_LLM", "qwen3.6:latest"),
+    "quick_think_llm": os.getenv("QUICK_THINK_LLM", "qwen3.6:latest"),
     # When None, each provider's client falls back to its own default endpoint
     # (api.openai.com for OpenAI, generativelanguage.googleapis.com for Gemini, ...).
     # The CLI overrides this per provider when the user picks one. Keeping a
