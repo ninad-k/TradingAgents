@@ -1,0 +1,9 @@
+{
+  "target_return_30d_pct": 4.7,
+  "min_sharpe": 1.0,
+  "max_drawdown_pct": -10.0,
+  "min_win_rate": 0.50,
+  "min_decisions_for_review": 20,
+  "evaluation_horizon_hours": 24,
+  "review_window_days": 30
+}

@@ -39,6 +39,9 @@ app = typer.Typer(
     add_completion=True,  # Enable shell completion
 )
 
+from cli.learning import learning_app
+app.add_typer(learning_app, name="learning")
+
 
 # Create a deque to store recent messages with a maximum length
 class MessageBuffer:

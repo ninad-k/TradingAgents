@@ -1,0 +1,10 @@
+{
+  "signal_confidence_threshold": 0.5,
+  "hold_horizon_hours": 24,
+  "max_position_size_pct": 5.0,
+  "min_news_age_hours": 0,
+  "news_weight": 1.0,
+  "market_weight": 1.0,
+  "fundamentals_weight": 1.0,
+  "social_weight": 1.0
+}

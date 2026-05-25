@@ -5,6 +5,13 @@ import json
 from datetime import datetime
 from io import StringIO
 
+from tradingagents.dataflows._backoff import (
+    CooldownActive,
+    guard,
+    record_failure,
+    record_success,
+)
+
 API_BASE_URL = "https://www.alphavantage.co/query"
 
 def get_api_key() -> str:
@@ -41,45 +48,55 @@ class AlphaVantageRateLimitError(Exception):
 
 def _make_api_request(function_name: str, params: dict) -> dict | str:
     """Helper function to make API requests and handle responses.
-    
+
     Raises:
-        AlphaVantageRateLimitError: When API rate limit is exceeded
+        AlphaVantageRateLimitError: When API rate limit is exceeded.
+        CooldownActive: When (function, ticker) is in backoff after recent failures.
     """
-    # Create a copy of params to avoid modifying the original
+    provider = f"alpha_vantage:{function_name}"
+    backoff_key = (
+        params.get("tickers")
+        or params.get("symbol")
+        or params.get("topics")
+        or "*"
+    )
+    guard(provider, backoff_key)
+
     api_params = params.copy()
     api_params.update({
         "function": function_name,
         "apikey": get_api_key(),
         "source": "trading_agents",
     })
-    
-    # Handle entitlement parameter if present in params or global variable
+
     current_entitlement = globals().get('_current_entitlement')
     entitlement = api_params.get("entitlement") or current_entitlement
-    
+
     if entitlement:
         api_params["entitlement"] = entitlement
     elif "entitlement" in api_params:
-        # Remove entitlement if it's None or empty
         api_params.pop("entitlement", None)
-    
-    response = requests.get(API_BASE_URL, params=api_params)
-    response.raise_for_status()
+
+    try:
+        response = requests.get(API_BASE_URL, params=api_params)
+        response.raise_for_status()
+    except requests.RequestException:
+        record_failure(provider, backoff_key)
+        raise
 
     response_text = response.text
-    
-    # Check if response is JSON (error responses are typically JSON)
+
     try:
         response_json = json.loads(response_text)
-        # Check for rate limit error
         if "Information" in response_json:
             info_message = response_json["Information"]
             if "rate limit" in info_message.lower() or "api key" in info_message.lower():
+                record_failure(provider, backoff_key)
                 raise AlphaVantageRateLimitError(f"Alpha Vantage rate limit exceeded: {info_message}")
     except json.JSONDecodeError:
-        # Response is not JSON (likely CSV data), which is normal
         pass
 
+    record_success(provider, backoff_key)
     return response_text
 
 

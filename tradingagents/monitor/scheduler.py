@@ -5,13 +5,17 @@ Runs as a background thread alongside the FastAPI dashboard server.
 """
 
 import logging
+import os
+import re
 import threading
 import time
-from datetime import datetime
-from typing import Optional, Callable, Dict, Any
+from datetime import datetime, timedelta
+from typing import Optional, Callable, Dict, Any, Tuple
 
 from tradingagents.monitor.watchlist import WatchlistEntry, watchlist
 from tradingagents.monitor.symbols import is_tradingview_symbol
+from tradingagents.monitor import store
+from tradingagents.monitor import learning_config
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +42,24 @@ class AnalysisResult:
         }
 
 
+def _result_from_row(row: Dict[str, Any]) -> AnalysisResult:
+    """Hydrate an AnalysisResult from a store row."""
+    result = AnalysisResult(
+        symbol=row["symbol"],
+        success=bool(row["success"]),
+        signal=row["signal"] or "UNKNOWN",
+        decision_text=row["decision_text"] or "",
+        error=row["error"],
+    )
+    ts = row.get("timestamp")
+    if ts:
+        try:
+            result.timestamp = datetime.fromisoformat(ts)
+        except (TypeError, ValueError):
+            pass
+    return result
+
+
 def _extract_signal(final_state: Dict) -> str:
     """Extract BUY/HOLD/SELL signal from the final trading state."""
     decision = final_state.get("final_trade_decision", "") or ""
@@ -54,6 +76,66 @@ def _extract_signal(final_state: Dict) -> str:
             return keyword
 
     return "UNKNOWN"
+
+
+# Matches "confidence: 0.75", "Confidence 75%", "**Confidence:** 80%" etc.
+# Captures the number; group(2) is "%" only if present so we can normalise.
+_CONFIDENCE_RE = re.compile(
+    r"confidence[^0-9%]{0,20}(\d{1,3}(?:\.\d+)?)\s*(%)?",
+    re.IGNORECASE,
+)
+
+
+def _parse_confidence(text: Optional[str]) -> Optional[float]:
+    """Best-effort parse of a confidence score from LLM decision text. 0.0-1.0."""
+    if not text:
+        return None
+    match = _CONFIDENCE_RE.search(text)
+    if not match:
+        return None
+    try:
+        value = float(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    if match.group(2) == "%" or value > 1.0:
+        value = value / 100.0
+    if not (0.0 <= value <= 1.0):
+        return None
+    return value
+
+
+def _apply_learned_gates(
+    signal: str, decision_text: str
+) -> Tuple[str, str, Optional[str]]:
+    """Apply learned-param gates between the LLM and the recorded decision.
+
+    Currently a single gate: if the decision text exposes a numeric confidence
+    and it falls below ``signal_confidence_threshold``, BUY/SELL is demoted to
+    HOLD. Returns ``(final_signal, annotated_decision_text, gate_reason)``.
+    """
+    if signal not in ("BUY", "SELL"):
+        return signal, decision_text, None
+    try:
+        params = learning_config.load_learned_params()
+    except Exception:
+        return signal, decision_text, None
+    threshold = params.get("signal_confidence_threshold")
+    try:
+        threshold = float(threshold) if threshold is not None else 0.0
+    except (TypeError, ValueError):
+        return signal, decision_text, None
+    if threshold <= 0:
+        return signal, decision_text, None
+    confidence = _parse_confidence(decision_text)
+    if confidence is None or confidence >= threshold:
+        return signal, decision_text, None
+    reason = (
+        f"confidence {confidence:.2f} < signal_confidence_threshold {threshold:.2f}"
+    )
+    annotated = (
+        f"{decision_text}\n\n[learned-gate] {signal}→HOLD: {reason}"
+    )
+    return "HOLD", annotated, reason
 
 
 def _run_single_analysis(entry: WatchlistEntry, config: Dict, event_callback: Optional[Callable] = None) -> AnalysisResult:
@@ -90,6 +172,10 @@ def _run_single_analysis(entry: WatchlistEntry, config: Dict, event_callback: Op
         signal = _extract_signal(final_state)
         decision_text = final_state.get("final_trade_decision", "No decision generated.")
 
+        signal, decision_text, gate_reason = _apply_learned_gates(signal, decision_text)
+        if gate_reason:
+            logger.info("Signal gated for %s: %s", symbol, gate_reason)
+
         watchlist.update_result(symbol, decision_text, signal)
 
         result = AnalysisResult(
@@ -98,6 +184,8 @@ def _run_single_analysis(entry: WatchlistEntry, config: Dict, event_callback: Op
             signal=signal,
             decision_text=decision_text,
         )
+        store.save_result(result)
+        _record_ledger(result)
 
         logger.info(f"Analysis complete for {symbol}: {signal}")
 
@@ -115,9 +203,33 @@ def _run_single_analysis(entry: WatchlistEntry, config: Dict, event_callback: Op
             decision_text="",
             error=str(e),
         )
+        store.save_result(result)
+        _record_ledger(result)
         if event_callback:
             event_callback("analysis_error", result.to_dict())
         return result
+
+
+def _record_ledger(result: AnalysisResult) -> None:
+    """Append the decision to the append-only ledger for the learning loop."""
+    try:
+        params = learning_config.load_learned_params()
+    except Exception:
+        params = {}
+    horizon = int(params.get("hold_horizon_hours", 24) or 24)
+    try:
+        store.record_decision(
+            symbol=result.symbol,
+            signal=result.signal,
+            decision_text=result.decision_text,
+            success=result.success,
+            horizon_hours=horizon,
+            params_snapshot=params or None,
+            error=result.error,
+            decided_at=result.timestamp,
+        )
+    except Exception as e:
+        logger.warning("Failed to record decision to ledger: %s", e)
 
 
 class MonitorScheduler:
@@ -134,6 +246,15 @@ class MonitorScheduler:
         self._event_callback: Optional[Callable] = None
         self._results: Dict[str, AnalysisResult] = {}
         self._config: Dict = {}
+
+        self._outcomes_interval = timedelta(
+            minutes=int(os.getenv("TRADINGAGENTS_OUTCOMES_INTERVAL_MIN", "15"))
+        )
+        self._review_interval = timedelta(
+            hours=int(os.getenv("TRADINGAGENTS_REVIEW_INTERVAL_HOURS", "168"))
+        )
+        self._last_outcomes_at: Optional[datetime] = None
+        self._last_review_at: Optional[datetime] = None
 
     def set_config(self, config: Dict):
         """Set the LLM/app config to use for analysis runs."""
@@ -160,12 +281,15 @@ class MonitorScheduler:
         logger.info("MonitorScheduler stopped")
 
     def get_result(self, symbol: str) -> Optional[AnalysisResult]:
-        """Get the latest analysis result for a symbol."""
-        return self._results.get(symbol.upper())
+        """Get the latest analysis result for a symbol (reads through store)."""
+        row = store.get_result(symbol)
+        if not row:
+            return self._results.get(symbol.upper())
+        return _result_from_row(row)
 
     def get_all_results(self) -> Dict[str, Dict]:
-        """Get all latest results as dicts."""
-        return {sym: r.to_dict() for sym, r in self._results.items()}
+        """Get all latest results as dicts (reads through store)."""
+        return store.load_results()
 
     def trigger_now(self, symbol: str) -> Optional[AnalysisResult]:
         """Immediately run analysis for a specific symbol (blocking)."""
@@ -190,11 +314,40 @@ class MonitorScheduler:
             except Exception as e:
                 logger.error(f"Scheduler loop error: {e}", exc_info=True)
 
+            self._tick_learning_jobs()
+
             # Wait before next check cycle
             for _ in range(self.check_interval):
                 if not self._running:
                     return
                 time.sleep(1)
+
+    def _tick_learning_jobs(self) -> None:
+        now = datetime.now()
+        if self._last_outcomes_at is None or (
+            now - self._last_outcomes_at >= self._outcomes_interval
+        ):
+            self._last_outcomes_at = now
+            try:
+                from tradingagents.monitor import outcomes
+                n = outcomes.evaluate_pending(now=now)
+                if n:
+                    logger.info("Outcome evaluator processed %d decisions", n)
+            except Exception as e:
+                logger.warning("Outcome evaluator failed: %s", e)
+        if self._last_review_at is None or (
+            now - self._last_review_at >= self._review_interval
+        ):
+            self._last_review_at = now
+            try:
+                from tradingagents.monitor import reviewer
+                result = reviewer.run_review()
+                logger.info(
+                    "Reviewer ran: applied=%s rejection=%s path=%s",
+                    result.applied, result.rejection_reason, result.proposal_path,
+                )
+            except Exception as e:
+                logger.warning("Reviewer failed: %s", e)
 
 
 # Global singleton scheduler

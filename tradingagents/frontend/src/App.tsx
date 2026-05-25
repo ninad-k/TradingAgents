@@ -2,13 +2,20 @@ import { useState, useEffect, useCallback } from 'react'
 import type { DashboardStatus, WatchlistEntry, AnalysisEvent } from './types'
 import { subscribeToLiveUpdates, getStatus, getWatchlist } from './api'
 import { Dashboard } from './components/Dashboard'
+import { ScoreboardPanel } from './components/Scoreboard'
+import { DecisionsLedger } from './components/DecisionsLedger'
+import { ProposalsPanel } from './components/Proposals'
+import { LearnedParamsPanel } from './components/LearnedParams'
 import './App.css'
+
+type Tab = 'overview' | 'scoreboard' | 'decisions' | 'proposals' | 'params'
 
 function App() {
   const [status, setStatus] = useState<DashboardStatus | null>(null)
   const [watchlistEntries, setWatchlistEntries] = useState<WatchlistEntry[]>([])
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [tab, setTab] = useState<Tab>('overview')
 
   const refreshWatchlist = useCallback(() => {
     getWatchlist().then(setWatchlistEntries).catch(console.error)
@@ -80,13 +87,56 @@ function App() {
         </div>
       )}
 
-      {status ? (
-        <Dashboard status={status} watchlistEntries={watchlistEntries} onWatchlistRefresh={refreshWatchlist} />
-      ) : (
-        <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
-          Loading dashboard...
-        </div>
+      <TabStrip current={tab} onChange={setTab} />
+
+      {tab === 'overview' && (
+        status ? (
+          <Dashboard status={status} watchlistEntries={watchlistEntries} onWatchlistRefresh={refreshWatchlist} />
+        ) : (
+          <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
+            Loading dashboard...
+          </div>
+        )
       )}
+      {tab === 'scoreboard' && <ScoreboardPanel />}
+      {tab === 'decisions' && <DecisionsLedger />}
+      {tab === 'proposals' && <ProposalsPanel />}
+      {tab === 'params' && <LearnedParamsPanel />}
+    </div>
+  )
+}
+
+function TabStrip({ current, onChange }: { current: Tab; onChange: (t: Tab) => void }) {
+  const tabs: { key: Tab; label: string }[] = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'scoreboard', label: 'Scoreboard' },
+    { key: 'decisions', label: 'Decisions' },
+    { key: 'proposals', label: 'Proposals' },
+    { key: 'params', label: 'Params' },
+  ]
+  return (
+    <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 20 }}>
+      {tabs.map((t) => {
+        const active = current === t.key
+        return (
+          <button
+            key={t.key}
+            onClick={() => onChange(t.key)}
+            style={{
+              padding: '10px 18px',
+              background: 'transparent',
+              border: 'none',
+              borderBottom: active ? '2px solid var(--accent-color, #5a8dee)' : '2px solid transparent',
+              color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: active ? 600 : 400,
+              fontSize: '0.95rem',
+            }}
+          >
+            {t.label}
+          </button>
+        )
+      })}
     </div>
   )
 }

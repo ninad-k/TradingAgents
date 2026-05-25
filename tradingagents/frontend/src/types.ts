@@ -88,3 +88,63 @@ export interface AnalysisEvent {
   data: AnalysisResult
   timestamp: string
 }
+
+// ─── Learning loop ─────────────────────────────────────────────────────────
+
+export interface PerSignalStats {
+  count: number
+  win_rate: number
+  mean_pnl_pct: number
+}
+
+export interface Scoreboard {
+  n_decisions: number
+  n_evaluated: number
+  win_rate: number | null
+  mean_pnl_pct: number | null
+  stdev_pnl_pct: number | null
+  sharpe: number | null
+  max_drawdown_pct: number | null
+  total_return_pct: number | null
+  per_signal: Record<string, PerSignalStats>
+}
+
+export interface DecisionRow {
+  id: number
+  symbol: string
+  signal: string
+  decision_text: string | null
+  success: boolean
+  error: string | null
+  params_snapshot: Record<string, unknown> | null
+  horizon_hours: number
+  decided_at: string
+  // From decision_outcomes (LEFT JOIN — may be null)
+  entry_price?: number | null
+  exit_price?: number | null
+  pnl_pct?: number | null
+  evaluated_at?: string | null
+  outcome_error?: string | null
+}
+
+export interface ProposalDiffEntry {
+  from: unknown
+  to: unknown
+}
+
+export interface Proposal {
+  id: number
+  params: Record<string, unknown>
+  diff: Record<string, ProposalDiffEntry> | null
+  rationale: string | null
+  applied: boolean
+  proposed_at: string
+  applied_at: string | null
+  rejected_at: string | null
+  rejection_reason: string | null
+  markdown?: string | null
+  markdown_path?: string | null
+}
+
+export type LearnedParams = Record<string, unknown>
+export type Goals = Record<string, unknown>

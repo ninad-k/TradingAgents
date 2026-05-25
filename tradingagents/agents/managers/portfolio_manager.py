@@ -61,7 +61,14 @@ def create_portfolio_manager(llm):
 
 ---
 
-Be decisive and ground every conclusion in specific evidence from the analysts.{get_language_instruction()}"""
+Be decisive and ground every conclusion in specific evidence from the analysts.
+
+**Confidence Calibration (required):** End your response with a single line
+`**Confidence**: 0.xx` where the number is between 0.00 and 1.00 reflecting how
+strongly the evidence supports the rating. Use 0.5 for a coin-flip, 0.7 for a
+clear lean, 0.85+ only when the analysts broadly converge with concrete data.
+Downstream gating may demote a low-confidence Buy/Sell to Hold, so calibrate
+honestly.{get_language_instruction()}"""
 
         final_trade_decision = invoke_structured_or_freetext(
             structured_llm,

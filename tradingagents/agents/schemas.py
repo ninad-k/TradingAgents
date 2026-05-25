@@ -204,6 +204,16 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
+    confidence: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Required numeric confidence in this decision, between 0.0 and 1.0. "
+            "0.5 = no strong view; 0.8+ = high conviction. Calibrate honestly: "
+            "downstream gating may demote low-confidence Buy/Sell ratings to Hold."
+        ),
+    )
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -225,4 +235,6 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
+    if decision.confidence is not None:
+        parts.extend(["", f"**Confidence**: {decision.confidence:.2f}"])
     return "\n".join(parts)

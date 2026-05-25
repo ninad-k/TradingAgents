@@ -1,6 +1,7 @@
 """FastAPI backend for trading dashboard."""
 
 import logging
+import os
 from typing import List, Dict, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -100,18 +101,29 @@ def _on_analysis_event(event_type: str, data: Dict):
     dashboard_manager.record_analysis_event(event_type, data)
 
 
+def _in_process_scheduler_enabled(config: Dict) -> bool:
+    """Run the scheduler in-process unless explicitly disabled (for separate worker)."""
+    if os.getenv("WATCHLIST_DISABLE_IN_PROCESS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return False
+    return bool(config.get("watchlist_enabled", True))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start/stop the watchlist scheduler alongside the API."""
     config = get_config()
 
-    # Wire scheduler event callback
     scheduler.set_event_callback(_on_analysis_event)
     scheduler.set_config(config)
 
-    if config.get("watchlist_enabled", True):
+    if _in_process_scheduler_enabled(config):
         scheduler.start()
-        logger.info("Watchlist scheduler started")
+        logger.info("Watchlist scheduler started (in-process)")
+    else:
+        logger.info(
+            "In-process watchlist scheduler disabled — "
+            "expecting `python -m tradingagents.monitor.worker` to run separately."
+        )
 
     logger.info("Trading Dashboard API started")
     yield
@@ -252,6 +264,145 @@ async def get_symbol_result(symbol: str) -> Dict:
 async def get_events(limit: int = 20) -> List[Dict]:
     """Get recent analysis events."""
     return dashboard_manager._analysis_events[-limit:]
+
+
+# ─── Market Intel ──────────────────────────────────────────────────────────
+
+@app.get("/api/market-intel/categories")
+async def list_market_intel_categories() -> List[Dict]:
+    """Return the news categories the dashboard can pull (equities/macro/crypto/...)."""
+    from tradingagents.dataflows.news_categories import list_categories
+    return list_categories()
+
+
+@app.get("/api/market-intel/snapshot")
+async def get_market_intel_snapshot(
+    look_back_days: int = 2,
+    limit: int = 15,
+    category: Optional[str] = None,
+) -> Dict:
+    """Cross-category market news + sentiment snapshot."""
+    from tradingagents.dataflows.news_categories import get_market_intel_snapshot
+    cats = [category] if category else None
+    return get_market_intel_snapshot(
+        look_back_days=look_back_days,
+        limit=limit,
+        categories=cats,
+    )
+
+
+# ─── Learning loop ─────────────────────────────────────────────────────────
+
+from pydantic import BaseModel
+
+
+class RejectProposalRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+@app.get("/api/learning/scoreboard")
+async def get_scoreboard(window_days: int = 30) -> Dict:
+    """Win rate, mean PnL, sharpe, drawdown over the recent decision window."""
+    from tradingagents.monitor import reviewer
+    return reviewer.build_scoreboard(window_days=window_days).to_dict()
+
+
+@app.get("/api/learning/decisions")
+async def get_decisions(
+    since: Optional[str] = None,
+    limit: int = 100,
+    symbol: Optional[str] = None,
+) -> List[Dict]:
+    """Decision ledger joined with outcomes. `since` is ISO-8601."""
+    from datetime import datetime as _dt
+    from tradingagents.monitor import store
+    since_dt = None
+    if since:
+        try:
+            since_dt = _dt.fromisoformat(since)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid `since`: {since}")
+    rows = store.recent_decisions_with_outcomes(since=since_dt, limit=limit)
+    if symbol:
+        sym = symbol.upper()
+        rows = [r for r in rows if (r.get("symbol") or "").upper() == sym]
+    return rows
+
+
+@app.get("/api/learning/proposals")
+async def get_proposals(status: str = "all", limit: int = 50) -> List[Dict]:
+    """List proposals — status: pending|applied|rejected|all."""
+    from tradingagents.monitor import store
+    if status not in {"pending", "applied", "rejected", "all"}:
+        raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+    return store.list_proposals(status=status, limit=limit)
+
+
+@app.get("/api/learning/proposals/{proposal_id}")
+async def get_proposal(proposal_id: int) -> Dict:
+    """Full proposal row + matching markdown summary if findable on disk."""
+    from tradingagents.monitor import store
+    from tradingagents.monitor import reviewer
+
+    proposal = store.get_proposal(proposal_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail=f"proposal {proposal_id} not found")
+
+    # Best-effort: pick the .md whose mtime is closest to proposed_at.
+    md_text: Optional[str] = None
+    md_path: Optional[str] = None
+    try:
+        if reviewer.PROPOSALS_DIR.exists():
+            from datetime import datetime as _dt
+            proposed = _dt.fromisoformat(proposal["proposed_at"])
+            candidates = sorted(reviewer.PROPOSALS_DIR.glob("*.md"))
+            if candidates:
+                def _delta(p):
+                    return abs(_dt.fromtimestamp(p.stat().st_mtime) - proposed)
+                best = min(candidates, key=_delta)
+                if _delta(best).total_seconds() < 24 * 3600:
+                    md_path = str(best)
+                    md_text = best.read_text(encoding="utf-8")
+    except Exception as e:
+        logger.warning("Failed to attach proposal markdown: %s", e)
+
+    return {**proposal, "markdown_path": md_path, "markdown": md_text}
+
+
+@app.post("/api/learning/proposals/{proposal_id}/approve")
+async def approve_proposal(proposal_id: int) -> Dict:
+    from tradingagents.monitor import store
+    try:
+        new_params = store.apply_proposal(proposal_id)
+    except store.ProposalNotFound:
+        raise HTTPException(status_code=404, detail=f"proposal {proposal_id} not found")
+    except store.ProposalAlreadyResolved as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"applied": True, "proposal_id": proposal_id, "params": new_params}
+
+
+@app.post("/api/learning/proposals/{proposal_id}/reject")
+async def reject_proposal(proposal_id: int, body: RejectProposalRequest) -> Dict:
+    from tradingagents.monitor import store
+    try:
+        proposal = store.reject_proposal(proposal_id, reason=body.reason)
+    except store.ProposalNotFound:
+        raise HTTPException(status_code=404, detail=f"proposal {proposal_id} not found")
+    except store.ProposalAlreadyResolved as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"rejected": True, "proposal_id": proposal_id, "proposal": proposal}
+
+
+@app.get("/api/learning/params")
+async def get_params() -> Dict:
+    from tradingagents.monitor import learning_config
+    return learning_config.load_learned_params()
+
+
+@app.get("/api/learning/goals")
+async def get_goals() -> Dict:
+    from tradingagents.monitor import learning_config
+    return learning_config.load_goals()
 
 
 # ─── WebSocket ─────────────────────────────────────────────────────────────
