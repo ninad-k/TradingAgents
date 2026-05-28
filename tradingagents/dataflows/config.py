@@ -29,3 +29,16 @@ def get_config() -> Dict:
 
 # Initialize with default config
 initialize_config()
+
+
+def apply_backtest_asof(date_str: str) -> str:
+    """Clamp a tool's end/current date to the active backtest as-of date.
+
+    During a backtest the controller sets ``backtest_as_of`` so the agents
+    cannot read bars past the bar currently being decided. ISO dates compare
+    lexicographically, so ``min`` is correct.
+    """
+    as_of = get_config().get("backtest_as_of")
+    if as_of and date_str and date_str > as_of:
+        return as_of
+    return date_str
