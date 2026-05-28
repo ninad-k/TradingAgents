@@ -13,7 +13,7 @@ _FOREX_SPECS: Dict[str, InstrumentSpec] = {
     "USDJPY": InstrumentSpec("USDJPY", InstrumentKind.FOREX, 0.01, 6.7, 0.01, 100, 0.01, 1.5),
 }
 
-INSTRUMENT_SPECS = _FOREX_SPECS
+INSTRUMENT_SPECS = dict(_FOREX_SPECS)
 
 
 def get_spec(symbol: str) -> InstrumentSpec:
@@ -43,13 +43,19 @@ class YFinanceBarProvider:
     """Daily equity bars via yfinance (timeframe '1d')."""
 
     def get_bars(self, symbol, start, end, timeframe) -> List[Bar]:
+        from datetime import datetime, timedelta
         import yfinance as yf
-        hist = yf.Ticker(symbol).history(start=start, end=end)
+        # yfinance treats `end` as exclusive; advance one day so the requested
+        # end date is included, matching the other providers' inclusive range.
+        end_excl = (datetime.strptime(end, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        hist = yf.Ticker(symbol).history(start=start, end=end_excl, interval=timeframe)
         out = []
         for ts, row in hist.iterrows():
-            out.append(Bar(date=ts.strftime("%Y-%m-%d"), open=float(row["Open"]),
-                           high=float(row["High"]), low=float(row["Low"]),
-                           close=float(row["Close"]), volume=float(row.get("Volume", 0.0))))
+            date = ts.strftime("%Y-%m-%d")
+            if start <= date <= end:
+                out.append(Bar(date=date, open=float(row["Open"]),
+                               high=float(row["High"]), low=float(row["Low"]),
+                               close=float(row["Close"]), volume=float(row.get("Volume", 0.0))))
         return out
 
 
@@ -62,7 +68,9 @@ class TradingViewBarProvider:
         from tvDatafeed import Interval, TvDatafeed
         from tradingagents.dataflows.tradingview import TV_EXCHANGE_MAP
         tv = TvDatafeed()
-        interval = getattr(Interval, self._INTERVALS.get(timeframe, "in_daily"))
+        if timeframe not in self._INTERVALS:
+            raise ValueError(f"Unsupported timeframe {timeframe!r}; expected one of {sorted(self._INTERVALS)}")
+        interval = getattr(Interval, self._INTERVALS[timeframe])
         exchange = TV_EXCHANGE_MAP.get(symbol.upper(), "OANDA")
         df = tv.get_hist(symbol=symbol, exchange=exchange, interval=interval, n_bars=5000)
         out = []
