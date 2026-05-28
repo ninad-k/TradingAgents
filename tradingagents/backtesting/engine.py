@@ -28,7 +28,7 @@ class BacktestEngine:
     Exit logic (_check_exit, checked at each bar while a position is open):
     - SL checked first: if low <= stop_loss → exit at min(open, stop_loss).
     - TP checked second: if high >= take_profit → exit at max(open, take_profit).
-    - TIME: if max_holding_hours set and elapsed >= threshold → exit at close.
+    - TIME: if max_holding_hours set and bars_held >= threshold → exit at close.
     - EOD: any position still open at the last bar is closed at that bar's close.
     """
 
@@ -47,6 +47,17 @@ class BacktestEngine:
         self._controller = controller
         self._position_model = position_model
 
+    def _hours_to_bars(self, hours: Optional[int]) -> Optional[int]:
+        if not hours:
+            return None
+        if self._config.timeframe == "1d":
+            return max(1, hours // 24)
+        if self._config.timeframe == "1h":
+            return max(1, hours)
+        if self._config.timeframe == "4h":
+            return max(1, hours // 4)
+        return None
+
     def run(self) -> BacktestResult:
         cfg = self._config
         bars = self._provider.get_bars(
@@ -57,6 +68,7 @@ class BacktestEngine:
         values: list[PortfolioValuePoint] = []
         trades = []
         pending: Optional[OrderIntent] = None
+        bars_held: int = 0
         calculator = PerformanceMetricsCalculator(annual_trading_days=cfg.annual_trading_days)
 
         for i, bar in enumerate(bars):
@@ -72,14 +84,17 @@ class BacktestEngine:
                     max_holding_hours=pending.max_holding_hours,
                 )
                 pending = None
+                bars_held = 0
 
             # 2. Manage open position: check SL → TP → TIME
             if not portfolio.is_flat():
-                exit_result = self._check_exit(portfolio.open_trade, bar)
+                bars_held += 1
+                exit_result = self._check_exit(portfolio.open_trade, bar, bars_held)
                 if exit_result is not None:
                     exit_price, reason = exit_result
                     trade = portfolio.close(bar.date, exit_price, reason)
                     trades.append(trade)
+                    bars_held = 0
 
             # 3. Rebalance while flat on cadence
             if portfolio.is_flat() and (i % cfg.cadence_bars == 0):
@@ -111,37 +126,21 @@ class BacktestEngine:
             benchmark_values=benchmark,
         )
 
-    @staticmethod
-    def _check_exit(trade, bar: Bar):
-        """Return (exit_price, reason) or None. SL evaluated before TP."""
-        sl = trade.stop_loss
-        tp = trade.take_profit
-
-        if trade.side == "BUY":
-            # SL first
-            if sl is not None and bar.low <= sl:
-                return (min(bar.open, sl), "SL")
-            # TP second
-            if tp is not None and bar.high >= tp:
-                return (max(bar.open, tp), "TP")
-        else:  # SELL / short
-            # SL first (price rises against short)
-            if sl is not None and bar.high >= sl:
-                return (max(bar.open, sl), "SL")
-            # TP second (price falls in favour of short)
-            if tp is not None and bar.low <= tp:
-                return (min(bar.open, tp), "TP")
-
-        # TIME exit: treat max_holding_hours as bars (daily bars ≈ 24 h each)
-        if trade.max_holding_hours is not None:
-            from datetime import datetime
-            try:
-                entry_dt = datetime.strptime(trade.entry_date, "%Y-%m-%d")
-                bar_dt = datetime.strptime(bar.date, "%Y-%m-%d")
-                elapsed_hours = (bar_dt - entry_dt).total_seconds() / 3600
-                if elapsed_hours >= trade.max_holding_hours:
-                    return (bar.close, "TIME")
-            except ValueError:
-                pass
-
+    def _check_exit(self, trade, bar: Bar, bars_held: int) -> Optional[tuple]:
+        """Return (exit_price, reason) if the bar triggers an exit, else None."""
+        long = trade.side == "BUY"
+        # SL first (worst case) when both could trigger in one bar.
+        if trade.stop_loss is not None:
+            if long and bar.low <= trade.stop_loss:
+                return (min(bar.open, trade.stop_loss), "SL")
+            if not long and bar.high >= trade.stop_loss:
+                return (max(bar.open, trade.stop_loss), "SL")
+        if trade.take_profit is not None:
+            if long and bar.high >= trade.take_profit:
+                return (max(bar.open, trade.take_profit), "TP")
+            if not long and bar.low <= trade.take_profit:
+                return (min(bar.open, trade.take_profit), "TP")
+        max_bars = self._hours_to_bars(trade.max_holding_hours)
+        if max_bars is not None and bars_held >= max_bars:
+            return (bar.close, "TIME")
         return None

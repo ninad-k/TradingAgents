@@ -10,6 +10,8 @@ from tradingagents.backtesting.engine import BacktestEngine
 from tradingagents.backtesting.position_models import EquitySharesModel
 from tradingagents.backtesting.types import Bar, BacktestConfig
 
+EQ = get_spec("AAPL")
+
 
 # ---------------------------------------------------------------------------
 # Stub controller
@@ -183,3 +185,44 @@ def test_sl_first_when_bar_hits_both():
     assert sl_trade.entry_price == 100.0
     assert sl_trade.exit_price == 98.0
     assert sl_trade.exit_reason == "SL"
+
+
+# ---------------------------------------------------------------------------
+# Test 3: TIME exit fires after max_holding_hours (bar-count, not date math)
+# ---------------------------------------------------------------------------
+
+def test_time_exit_after_max_holding_bars():
+    from tradingagents.backtesting.types import OrderIntent
+    bars = [
+        Bar("2024-01-01", 100, 100, 100, 100),
+        Bar("2024-01-02", 100, 100, 100, 100),   # entry at open 100, bars_held=1
+        Bar("2024-01-03", 100, 100, 100, 100),   # bars_held=2 -> TIME (48h/1d = 2 bars)
+        Bar("2024-01-04", 100, 100, 100, 100),
+    ]
+    provider = FakeBarProvider({"AAPL": bars})
+
+    class TimeModel:
+        def build_order(self, decision, spec, bar, equity):
+            if decision.rating == PortfolioRating.BUY:
+                return OrderIntent(side="BUY", volume=10, entry_price=bar.close,
+                                   stop_loss=None, take_profit=None, max_holding_hours=48)
+            return None
+
+    class OnceController:
+        def __init__(self):
+            self._seen = set()
+        def decide(self, symbol, date):
+            if date in self._seen:
+                return PortfolioDecision(rating=PortfolioRating.HOLD, executive_summary="",
+                                         investment_thesis="")
+            self._seen.add(date)
+            return PortfolioDecision(rating=PortfolioRating.BUY, executive_summary="",
+                                     investment_thesis="")
+
+    config = BacktestConfig(ticker="AAPL", start_date="2024-01-01", end_date="2024-01-04",
+                            cadence_bars=1, initial_capital=10_000.0, timeframe="1d")
+    engine = BacktestEngine(config=config, spec=EQ, provider=provider,
+                            controller=OnceController(), position_model=TimeModel())
+    result = engine.run()
+    assert result.trades[0].exit_reason == "TIME"
+    assert result.trades[0].exit_date == "2024-01-03"
