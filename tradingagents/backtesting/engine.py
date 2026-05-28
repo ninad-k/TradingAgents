@@ -18,18 +18,16 @@ from .types import (
 
 
 class BacktestEngine:
-    """Single-symbol bar-loop backtest.
+    """Single-instrument bar loop.
 
-    Fill logic:
-    - When flat and a decision arrives (every cadence_bars bars), the engine
-      stores a pending OrderIntent.
-    - The pending entry is filled at the *next* bar's open (t+1 fill).
+    Entries fill at the next bar's open; SL/TP are checked intrabar on
+    SUBSEQUENT bars (SL takes priority when a bar hits both); a position
+    is held until SL/TP, a bar-count time-stop, or end-of-data.
 
-    Exit logic (_check_exit, checked at each bar while a position is open):
-    - SL checked first: if low <= stop_loss → exit at min(open, stop_loss).
-    - TP checked second: if high >= take_profit → exit at max(open, take_profit).
-    - TIME: if max_holding_hours set and bars_held >= threshold → exit at close.
-    - EOD: any position still open at the last bar is closed at that bar's close.
+    A new decision is requested only on a rebalance bar (every ``cadence_bars``
+    bars) AND only while flat. While a position is open, intervening rebalance
+    bars are skipped, so the effective time between entries is at least
+    ``cadence_bars`` bars and longer whenever a position is held across one.
     """
 
     def __init__(

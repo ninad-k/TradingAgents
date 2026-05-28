@@ -7,7 +7,12 @@ from .types import Bar, InstrumentSpec, PortfolioValuePoint, position_pnl
 
 def buy_and_hold(bars: List[Bar], initial_capital: float,
                  spec: InstrumentSpec) -> List[PortfolioValuePoint]:
-    """Equity curve of buying at the first bar's close and holding."""
+    """Equity curve of buying at the first bar's close and holding.
+
+    For forex the benchmark sizes ``initial_capital / entry`` lots, which is not
+    risk-matched to the strategy's risk-sized lots, so absolute forex
+    buy-and-hold exposure is not directly comparable to the strategy's PnL.
+    """
     if not bars:
         return []
     entry = bars[0].close

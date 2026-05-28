@@ -28,7 +28,7 @@ def parse_args(argv=None):
     p.add_argument("--ticker", required=True)
     p.add_argument("--start", required=True, dest="start")
     p.add_argument("--end", required=True, dest="end")
-    p.add_argument("--timeframe", default="1d", choices=["1d", "1h", "4h"])
+    p.add_argument("--timeframe", default="1d", choices=["1d"], help="bar timeframe (only daily supported in v1)")
     p.add_argument("--cadence", type=int, default=5, help="rebalance every N bars")
     p.add_argument("--initial-capital", type=float, default=100_000.0, dest="initial_capital")
     p.add_argument("--max-risk-percent", type=float, default=2.0, dest="max_risk_percent")

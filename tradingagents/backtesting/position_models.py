@@ -23,6 +23,11 @@ class EquitySharesModel:
 
     Note: intentionally emits no stop-loss in v1 (``stop_loss=None``); position
     exits rely on take-profit and the engine's time/EOD handling.
+
+    For equities a Sell/Underweight opens a short with no stop-loss (the shares
+    model emits ``stop_loss=None``); such a short is only closed by its
+    take-profit (if reachable) or the engine's end-of-data force-close — a v1
+    simplification (no margin/borrow modeling).
     """
 
     def __init__(self, buy_fraction: float = 0.05, reduce_fraction: float = 0.03) -> None:
