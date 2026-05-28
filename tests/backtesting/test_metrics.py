@@ -29,3 +29,13 @@ def test_total_return_and_ending_value():
     m = PerformanceMetricsCalculator().compute_metrics(_points([100, 110, 120]))
     assert m.ending_value == 120
     assert round(m.total_return_pct, 4) == 20.0
+
+
+def test_sortino_finite_with_downside_and_inf_without():
+    import math
+    # series with a pullback -> downside deviation > 0 -> finite Sortino
+    m = PerformanceMetricsCalculator().compute_metrics(_points([100, 102, 99, 103, 101]))
+    assert m.sortino_ratio is not None and math.isfinite(m.sortino_ratio)
+    # strictly increasing -> no downside, positive mean -> +inf Sortino
+    m2 = PerformanceMetricsCalculator().compute_metrics(_points([100, 101, 102, 103]))
+    assert m2.sortino_ratio == float("inf")
