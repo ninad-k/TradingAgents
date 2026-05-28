@@ -85,16 +85,16 @@ class BacktestConfig:
     max_risk_percent: float = 2.0
     annual_trading_days: int = 252
     agent_config: dict = field(default_factory=dict)
-    selected_analysts: tuple = ("market", "social", "news", "fundamentals")
+    selected_analysts: tuple[str, ...] = ("market", "social", "news", "fundamentals")
 
 
 @dataclass
 class BacktestResult:
     config: BacktestConfig
-    values: list                 # list[PortfolioValuePoint]
-    trades: list                 # list[Trade]
+    values: list[PortfolioValuePoint]
+    trades: list[Trade]
     metrics: PerformanceMetrics
-    benchmark_values: list       # list[PortfolioValuePoint]
+    benchmark_values: list[PortfolioValuePoint]
 
 
 def position_pnl(spec: InstrumentSpec, side: str, entry_price: float,
