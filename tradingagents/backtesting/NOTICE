@@ -1,0 +1,4 @@
+Portions of this package (metrics.py, and the structure of engine.py,
+portfolio.py, benchmarks.py, output.py) are adapted from
+virattt/ai-hedge-fund (https://github.com/virattt/ai-hedge-fund),
+licensed under the MIT License.
