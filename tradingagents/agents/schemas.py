@@ -18,10 +18,12 @@ so that:
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field
+from tradingagents.agents.utils.rating import parse_rating
 
 
 # ---------------------------------------------------------------------------
@@ -238,3 +240,32 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     if decision.confidence is not None:
         parts.extend(["", f"**Confidence**: {decision.confidence:.2f}"])
     return "\n".join(parts)
+
+
+def parse_pm_decision(markdown: str) -> PortfolioDecision:
+    """Inverse of :func:`render_pm_decision`, tolerant of free-text fallback output.
+
+    The rating is extracted with the shared 5-tier heuristic; optional numeric
+    and text fields are best-effort regex matches that default to ``None``.
+    """
+    rating = PortfolioRating(parse_rating(markdown))
+
+    def _grab(label: str):
+        m = re.search(rf"\*\*{label}\*\*\s*[:\-]\s*(.+)", markdown, re.IGNORECASE)
+        return m.group(1).strip() if m else None
+
+    def _grab_float(label: str):
+        raw = _grab(label)
+        if not raw:
+            return None
+        m = re.search(r"-?\d+(?:\.\d+)?", raw)
+        return float(m.group(0)) if m else None
+
+    return PortfolioDecision(
+        rating=rating,
+        executive_summary=_grab("Executive Summary") or "",
+        investment_thesis=_grab("Investment Thesis") or "",
+        price_target=_grab_float("Price Target"),
+        time_horizon=_grab("Time Horizon"),
+        confidence=_grab_float("Confidence"),
+    )
