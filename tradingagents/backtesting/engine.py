@@ -72,22 +72,20 @@ class BacktestEngine:
         calculator = PerformanceMetricsCalculator(annual_trading_days=cfg.annual_trading_days)
 
         for i, bar in enumerate(bars):
-            # 1. Fill pending entry at this bar's open (t+1 from the decide bar)
+            filled_this_bar = False
+            # 1) Fill a pending entry at this bar's open.
             if pending is not None and portfolio.is_flat():
-                portfolio.open(
-                    side=pending.side,
-                    date=bar.date,
-                    price=bar.open,
-                    volume=pending.volume,
-                    stop_loss=pending.stop_loss,
-                    take_profit=pending.take_profit,
-                    max_holding_hours=pending.max_holding_hours,
-                )
-                pending = None
+                portfolio.open(side=pending.side, date=bar.date, price=bar.open,
+                               volume=pending.volume, stop_loss=pending.stop_loss,
+                               take_profit=pending.take_profit,
+                               max_holding_hours=pending.max_holding_hours)
                 bars_held = 0
+                pending = None
+                filled_this_bar = True
 
-            # 2. Manage open position: check SL → TP → TIME
-            if not portfolio.is_flat():
+            # 2) Manage an open position only on bars AFTER the entry bar, so a
+            #    position can never enter and exit within the same bar (no look-ahead).
+            if not portfolio.is_flat() and not filled_this_bar:
                 bars_held += 1
                 exit_result = self._check_exit(portfolio.open_trade, bar, bars_held)
                 if exit_result is not None:

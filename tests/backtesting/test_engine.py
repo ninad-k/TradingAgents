@@ -225,4 +225,90 @@ def test_time_exit_after_max_holding_bars():
                             controller=OnceController(), position_model=TimeModel())
     result = engine.run()
     assert result.trades[0].exit_reason == "TIME"
-    assert result.trades[0].exit_date == "2024-01-03"
+    assert result.trades[0].exit_date == "2024-01-04"
+
+
+# ---------------------------------------------------------------------------
+# Test 4: Entry bar's own range must NOT trigger an exit (no look-ahead bias)
+# ---------------------------------------------------------------------------
+
+def test_no_exit_on_entry_bar():
+    from tradingagents.backtesting.types import OrderIntent
+    # The entry bar's own range spans the TP, but the position must NOT exit on
+    # the fill bar; the exit happens on the next bar that reaches the TP.
+    bars = [
+        Bar("2024-01-01", 100, 100, 100, 100),
+        Bar("2024-01-02", 100, 130, 100, 100),   # entry at open 100; high 130 >= TP, same bar -> NO exit
+        Bar("2024-01-03", 100, 130, 100, 100),   # subsequent bar reaches TP -> exit here
+    ]
+    provider = FakeBarProvider({"AAPL": bars})
+
+    class TPModel:
+        def build_order(self, decision, spec, bar, equity):
+            if decision.rating == PortfolioRating.BUY:
+                return OrderIntent(side="BUY", volume=10, entry_price=bar.close,
+                                   stop_loss=None, take_profit=105.0)
+            return None
+
+    class OnceController:
+        def __init__(self):
+            self._seen = set()
+        def decide(self, symbol, date):
+            if date in self._seen:
+                return PortfolioDecision(rating=PortfolioRating.HOLD, executive_summary="",
+                                         investment_thesis="")
+            self._seen.add(date)
+            return PortfolioDecision(rating=PortfolioRating.BUY, executive_summary="",
+                                     investment_thesis="")
+
+    config = BacktestConfig(ticker="AAPL", start_date="2024-01-01", end_date="2024-01-03",
+                            cadence_bars=1, initial_capital=10_000.0)
+    engine = BacktestEngine(config=config, spec=EQ, provider=provider,
+                            controller=OnceController(), position_model=TPModel())
+    result = engine.run()
+    t = result.trades[0]
+    assert t.entry_date == "2024-01-02"
+    assert t.exit_date == "2024-01-03"      # exits the bar AFTER entry, never the entry bar
+    assert t.exit_reason == "TP"
+
+
+# ---------------------------------------------------------------------------
+# Test 5: SHORT position — SL fires when bar high breaches stop level
+# ---------------------------------------------------------------------------
+
+def test_short_stop_loss_exit():
+    from tradingagents.backtesting.types import OrderIntent
+    bars = [
+        Bar("2024-01-01", 100, 100, 100, 100),
+        Bar("2024-01-02", 100, 100, 100, 100),   # entry at open 100 (SHORT)
+        Bar("2024-01-03", 100, 109, 100, 100),   # high 109 >= SL 108 -> SL exit for a short
+    ]
+    provider = FakeBarProvider({"AAPL": bars})
+
+    class ShortModel:
+        def build_order(self, decision, spec, bar, equity):
+            if decision.rating == PortfolioRating.SELL:
+                return OrderIntent(side="SELL", volume=10, entry_price=bar.close,
+                                   stop_loss=108.0, take_profit=90.0)
+            return None
+
+    class OnceController:
+        def __init__(self):
+            self._seen = set()
+        def decide(self, symbol, date):
+            if date in self._seen:
+                return PortfolioDecision(rating=PortfolioRating.HOLD, executive_summary="",
+                                         investment_thesis="")
+            self._seen.add(date)
+            return PortfolioDecision(rating=PortfolioRating.SELL, executive_summary="",
+                                     investment_thesis="")
+
+    config = BacktestConfig(ticker="AAPL", start_date="2024-01-01", end_date="2024-01-03",
+                            cadence_bars=1, initial_capital=10_000.0)
+    engine = BacktestEngine(config=config, spec=EQ, provider=provider,
+                            controller=OnceController(), position_model=ShortModel())
+    result = engine.run()
+    t = result.trades[0]
+    assert t.side == "SELL"
+    assert t.exit_reason == "SL"
+    assert t.exit_price == 108.0            # max(open 100, SL 108) for a short gap-through
