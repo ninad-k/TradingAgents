@@ -98,6 +98,13 @@ class SymbolInfo(BaseModel):
     max_volume: float = Field(description="Maximum volume")
     volume_step: float = Field(description="Volume step")
 
+    # Account-currency value of a one-`point` price move per 1.0 lot. Drives
+    # risk-based sizing. None when unknown — sizing must refuse rather than guess.
+    pip_value_per_lot: Optional[float] = Field(
+        default=None,
+        description="Account-currency value of a one-point move per 1.0 lot",
+    )
+
     # Swaps & fees
     swap_long: Optional[float] = Field(default=None, description="Long swap per lot")
     swap_short: Optional[float] = Field(default=None, description="Short swap per lot")

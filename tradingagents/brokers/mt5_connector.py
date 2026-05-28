@@ -186,16 +186,28 @@ class NativeMT5Connector(MT5ConnectorBase):
                 logger.warning(f"Cannot get tick for {symbol}")
                 return None
 
+            # MT5 reports tick value per `trade_tick_size`; rescale to per-`point`
+            # so it matches the unit used by risk-based sizing (risk in points).
+            point = float(sym.point)
+            tick_value = float(getattr(sym, "trade_tick_value", 0.0) or 0.0)
+            tick_size = float(getattr(sym, "trade_tick_size", 0.0) or 0.0)
+            pip_value_per_lot = (
+                tick_value * (point / tick_size)
+                if tick_value > 0 and tick_size > 0 and point > 0
+                else None
+            )
+
             return SymbolInfo(
                 symbol=symbol,
                 bid=float(tick.bid),
                 ask=float(tick.ask),
                 spread=(float(tick.ask) - float(tick.bid)) / sym.point if sym.point else 0,
                 digits=sym.digits,
-                point=float(sym.point),
+                point=point,
                 min_volume=float(sym.volume_min),
                 max_volume=float(sym.volume_max),
                 volume_step=float(sym.volume_step),
+                pip_value_per_lot=pip_value_per_lot,
                 swap_long=float(sym.swap_long) if sym.swap_long else None,
                 swap_short=float(sym.swap_short) if sym.swap_short else None,
             )
@@ -387,16 +399,19 @@ class MockMT5Connector(MT5ConnectorBase):
         if not self.is_connected():
             return None
 
-        # Mock data for common symbols
+        # Mock data for common symbols. pip_value = account-USD value of one
+        # `point` move per 1.0 lot (FX majors ~10, XAUUSD ~1, JPY pairs ~6.7).
         mock_data = {
-            "EURUSD": {"bid": 1.0950, "ask": 1.0952, "point": 0.0001},
-            "GBPUSD": {"bid": 1.2650, "ask": 1.2652, "point": 0.0001},
-            "AAPL": {"bid": 150.25, "ask": 150.27, "point": 0.01},
-            "NVDA": {"bid": 875.50, "ask": 875.75, "point": 0.01},
+            "EURUSD": {"bid": 1.0950, "ask": 1.0952, "point": 0.0001, "pip_value": 10.0},
+            "GBPUSD": {"bid": 1.2650, "ask": 1.2652, "point": 0.0001, "pip_value": 10.0},
+            "USDJPY": {"bid": 150.00, "ask": 150.02, "point": 0.01, "pip_value": 6.7},
+            "XAUUSD": {"bid": 2000.00, "ask": 2000.30, "point": 0.01, "pip_value": 1.0},
+            "AAPL": {"bid": 150.25, "ask": 150.27, "point": 0.01, "pip_value": 1.0},
+            "NVDA": {"bid": 875.50, "ask": 875.75, "point": 0.01, "pip_value": 1.0},
         }
 
         if symbol not in mock_data:
-            mock_data[symbol] = {"bid": 100.0, "ask": 100.02, "point": 0.01}
+            mock_data[symbol] = {"bid": 100.0, "ask": 100.02, "point": 0.01, "pip_value": 1.0}
 
         data = mock_data[symbol]
         return SymbolInfo(
@@ -409,6 +424,7 @@ class MockMT5Connector(MT5ConnectorBase):
             min_volume=0.01,
             max_volume=1000.0,
             volume_step=0.01,
+            pip_value_per_lot=data["pip_value"],
         )
 
     def get_position(self, symbol: str) -> Optional[Position]:

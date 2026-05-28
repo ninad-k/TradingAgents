@@ -48,10 +48,9 @@ class EquitySharesModel:
 class ForexLotModel:
     """Wraps the live OrderGenerator so the backtest exercises deploy sizing/SL/TP.
 
-    Note: lot sizing inherits ``OrderGenerator``'s pip-value convention (currently
-    a fixed pip value), so absolute lot sizes for non-EURUSD instruments (e.g.
-    XAUUSD) reflect that live assumption rather than instrument-specific pip
-    economics.
+    Lot sizing uses the instrument's ``pip_value_per_lot`` (threaded into
+    ``SymbolInfo``), so absolute lot sizes are instrument-specific and match the
+    PnL economics applied by ``position_pnl``.
     """
 
     def __init__(self, max_risk_percent: float = 2.0) -> None:
@@ -63,7 +62,7 @@ class ForexLotModel:
             symbol=spec.symbol, bid=bar.close, ask=bar.close + spread_price,
             spread=spec.spread_points, digits=2, point=spec.point,
             min_volume=spec.min_volume, max_volume=spec.max_volume,
-            volume_step=spec.volume_step,
+            volume_step=spec.volume_step, pip_value_per_lot=spec.pip_value_per_lot,
         )
 
     def _account_info(self, equity: float) -> AccountInfo:

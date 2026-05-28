@@ -143,6 +143,7 @@ def test_order_generator():
         min_volume=0.01,
         max_volume=1000.0,
         volume_step=0.01,
+        pip_value_per_lot=10.0,
     )
 
     # Generate order

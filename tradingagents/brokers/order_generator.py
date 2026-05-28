@@ -52,6 +52,19 @@ class OrderGenerator:
         self.max_risk_percent = max_risk_percent
         self.max_risk_usd = max_risk_usd
 
+    @staticmethod
+    def _pip_value_per_lot(symbol_info: SymbolInfo) -> Optional[float]:
+        """Account-currency value of a one-`point` move per 1.0 lot.
+
+        Returns None when unavailable; callers MUST refuse to size rather than
+        assume a value. Guessing (the old fixed 10.0 EURUSD default) mis-sizes
+        real-money positions ~10x for non-EURUSD instruments such as XAUUSD.
+        """
+        pv = symbol_info.pip_value_per_lot
+        if pv is None or pv <= 0:
+            return None
+        return pv
+
     def decision_to_order(
         self,
         decision: PortfolioDecision,
@@ -225,9 +238,14 @@ class OrderGenerator:
                 else:
                     max_risk = account_info.equity * (self.max_risk_percent / 100)
 
-                # Volume = max_risk / (risk_pips * pip_value)
-                # For FX: pip_value = 10 USD per pip per standard lot (0.1 lots = 1 USD per pip)
-                pip_value = 10.0  # Default for FX, could be symbol-specific
+                pip_value = self._pip_value_per_lot(symbol_info)
+                if pip_value is None:
+                    logger.error(
+                        f"{symbol_info.symbol}: no pip_value_per_lot available; "
+                        f"refusing to size. Populate SymbolInfo.pip_value_per_lot."
+                    )
+                    return 0.0
+                # Volume = max_risk / (loss per lot at SL) = max_risk / (risk_pips * pip_value)
                 volume = max_risk / (risk_pips * pip_value)
 
         # Respect symbol limits
@@ -260,8 +278,11 @@ class OrderGenerator:
         if not stop_loss:
             return None
 
+        pip_value = self._pip_value_per_lot(symbol_info)
+        if pip_value is None:
+            return None
+
         risk_pips = abs(entry_price - stop_loss) / symbol_info.point if symbol_info.point else 0
-        pip_value = 10.0  # Default for FX
 
         return risk_pips * volume * pip_value
 
@@ -334,9 +355,9 @@ class OrderGenerator:
         reward_target = None
         risk_reward_ratio = None
 
-        if order.take_profit and order.entry_price:
+        pip_value = self._pip_value_per_lot(symbol_info)
+        if order.take_profit and order.entry_price and pip_value is not None:
             reward_pips = abs(order.take_profit - order.entry_price) / symbol_info.point
-            pip_value = 10.0
             reward_target = reward_pips * order.volume * pip_value
 
             if risk_per_trade and risk_per_trade > 0:

@@ -1,5 +1,5 @@
 from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
-from tradingagents.backtesting.types import Bar, InstrumentKind, InstrumentSpec
+from tradingagents.backtesting.types import Bar, InstrumentKind, InstrumentSpec, position_pnl
 from tradingagents.backtesting.position_models import EquitySharesModel, ForexLotModel
 
 EQ = InstrumentSpec("AAPL", InstrumentKind.EQUITY, 0.01, 0.0, 1, 1e9, 1, 0.0)
@@ -57,3 +57,14 @@ def test_forex_sell_has_sl_above_entry():
     assert intent.volume > 0
     assert intent.stop_loss is not None and intent.stop_loss > 2000.0   # SL above entry for short
     assert intent.take_profit == 1950.0
+
+
+def test_forex_xauusd_risk_matches_configured_percent():
+    # XAUUSD pip_value_per_lot=1.0 must flow into sizing. Realized loss if the
+    # stop is hit should land near max_risk_percent of equity, not ~10x off.
+    intent = ForexLotModel(max_risk_percent=2.0).build_order(
+        _decision(PortfolioRating.BUY, price_target=2050.0), FX, Bar(
+            date="2024-03-01", open=2000.0, high=2010.0, low=1990.0, close=2000.0), 10_000.0)
+    assert intent.volume > 1.0  # ~1.67 lots; the old fixed pip value gave ~0.17
+    realized_loss = position_pnl(FX, "BUY", intent.entry_price, intent.stop_loss, intent.volume)
+    assert 190.0 <= abs(realized_loss) <= 210.0  # ~2% of $10k
