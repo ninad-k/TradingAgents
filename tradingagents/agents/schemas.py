@@ -261,11 +261,17 @@ def parse_pm_decision(markdown: str) -> PortfolioDecision:
         m = re.search(r"-?\d+(?:\.\d+)?", raw)
         return float(m.group(0)) if m else None
 
+    confidence = _grab_float("Confidence")
+    if confidence is not None:
+        if confidence > 1.0:           # tolerate percentage-style values like 82(%)
+            confidence = confidence / 100.0
+        confidence = max(0.0, min(1.0, confidence))  # clamp into the model's [0,1] range
+
     return PortfolioDecision(
         rating=rating,
         executive_summary=_grab("Executive Summary") or "",
         investment_thesis=_grab("Investment Thesis") or "",
         price_target=_grab_float("Price Target"),
         time_horizon=_grab("Time Horizon"),
-        confidence=_grab_float("Confidence"),
+        confidence=confidence,
     )

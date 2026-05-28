@@ -29,3 +29,14 @@ def test_freetext_without_optionals_defaults_to_none():
 def test_missing_rating_defaults_hold():
     parsed = parse_pm_decision("No clear edge in either direction.")
     assert parsed.rating == PortfolioRating.HOLD
+
+
+def test_confidence_percentage_does_not_crash():
+    parsed = parse_pm_decision("**Rating**: Buy\n\n**Confidence**: 82%")
+    assert parsed.confidence is not None
+    assert round(parsed.confidence, 2) == 0.82
+
+
+def test_overweight_and_underweight_ratings_parse():
+    assert parse_pm_decision("**Rating**: Overweight").rating == PortfolioRating.OVERWEIGHT
+    assert parse_pm_decision("**Rating**: Underweight").rating == PortfolioRating.UNDERWEIGHT
