@@ -37,3 +37,23 @@ def test_forex_buy_uses_order_generator_lots_and_levels():
 
 def test_forex_hold_returns_none():
     assert ForexLotModel().build_order(_decision(PortfolioRating.HOLD), FX, BAR, 10_000.0) is None
+
+
+def test_equity_sell_and_underweight_use_distinct_fractions():
+    m = EquitySharesModel(buy_fraction=0.05, reduce_fraction=0.03)
+    sell = m.build_order(_decision(PortfolioRating.SELL), EQ, BAR, 10_000.0)
+    under = m.build_order(_decision(PortfolioRating.UNDERWEIGHT), EQ, BAR, 10_000.0)
+    assert sell.side == "SELL" and under.side == "SELL"
+    # SELL uses buy_fraction 0.05 -> 5 shares; UNDERWEIGHT uses reduce_fraction 0.03 -> 3 shares
+    assert sell.volume == 5
+    assert under.volume == 3
+
+
+def test_forex_sell_has_sl_above_entry():
+    intent = ForexLotModel(max_risk_percent=2.0).build_order(
+        _decision(PortfolioRating.SELL, price_target=1950.0), FX, Bar(
+            date="2024-03-01", open=2000.0, high=2010.0, low=1990.0, close=2000.0), 10_000.0)
+    assert intent.side == "SELL"
+    assert intent.volume > 0
+    assert intent.stop_loss is not None and intent.stop_loss > 2000.0   # SL above entry for short
+    assert intent.take_profit == 1950.0

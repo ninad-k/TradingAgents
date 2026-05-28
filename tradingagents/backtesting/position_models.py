@@ -19,7 +19,11 @@ class PositionModel(Protocol):
 
 
 class EquitySharesModel:
-    """Share-based sizing as a fraction of current equity."""
+    """Share-based sizing as a fraction of current equity.
+
+    Note: intentionally emits no stop-loss in v1 (``stop_loss=None``); position
+    exits rely on take-profit and the engine's time/EOD handling.
+    """
 
     def __init__(self, buy_fraction: float = 0.05, reduce_fraction: float = 0.03) -> None:
         self.buy_fraction = buy_fraction
@@ -42,7 +46,13 @@ class EquitySharesModel:
 
 
 class ForexLotModel:
-    """Wraps the live OrderGenerator so the backtest exercises deploy sizing/SL/TP."""
+    """Wraps the live OrderGenerator so the backtest exercises deploy sizing/SL/TP.
+
+    Note: lot sizing inherits ``OrderGenerator``'s pip-value convention (currently
+    a fixed pip value), so absolute lot sizes for non-EURUSD instruments (e.g.
+    XAUUSD) reflect that live assumption rather than instrument-specific pip
+    economics.
+    """
 
     def __init__(self, max_risk_percent: float = 2.0) -> None:
         self._gen = OrderGenerator(max_risk_percent=max_risk_percent)
