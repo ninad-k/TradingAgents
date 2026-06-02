@@ -24,7 +24,13 @@ def get_config() -> Dict:
     """Get the current configuration."""
     if _config is None:
         initialize_config()
-    return _config.copy()
+    config = _config.copy()
+    try:
+        from tradingagents.monitor import app_settings
+        config.update(app_settings.load_settings())
+    except Exception:
+        pass
+    return config
 
 
 # Initialize with default config

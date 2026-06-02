@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
-## [0.2.4] — 2026-04-25
+## 0.2.4 — 2026-04-25
 
 ### Added
 
@@ -94,7 +94,7 @@ Thanks to everyone who shaped this release through code, design, and reports:
 - [@Stosman123](https://github.com/Stosman123), [@mauropuga](https://github.com/mauropuga), [@hotwind2015](https://github.com/hotwind2015) — Windows encoding bug reports (#543, #550, #576)
 - [@nnishad](https://github.com/nnishad), [@atharvajoshi01](https://github.com/atharvajoshi01) — encoding fix proposals (#568, #549)
 
-## [0.2.3] — 2026-03-29
+## 0.2.3 — 2026-03-29
 
 ### Added
 
@@ -129,7 +129,7 @@ Thanks to everyone who shaped this release through code, design, and reports:
 - [@lu-zhengda](https://github.com/lu-zhengda) — proxy/base_url support request (#427)
 - [@VamsiKrishna2021](https://github.com/VamsiKrishna2021) — invalid indicator crash report (#429)
 
-## [0.2.2] — 2026-03-22
+## 0.2.2 — 2026-03-22
 
 ### Added
 
@@ -160,7 +160,7 @@ Thanks to everyone who shaped this release through code, design, and reports:
 - [@CadeYu](https://github.com/CadeYu) — exchange-qualified ticker preservation (#413)
 - [@yang1002378395-cmyk](https://github.com/yang1002378395-cmyk) — HTTP client SSL customisation (#379)
 
-## [0.2.1] — 2026-03-15
+## 0.2.1 — 2026-03-15
 
 ### Security
 
@@ -192,7 +192,7 @@ Thanks to everyone who shaped this release through code, design, and reports:
 - [@Ljx-007](https://github.com/Ljx-007) — risk manager fundamental-report fix (#341)
 - [@makk9](https://github.com/makk9) — debate-rounds config issue (#361)
 
-## [0.2.0] — 2026-02-04
+## 0.2.0 — 2026-02-04
 
 This is the largest release since the initial public version. The framework
 moved from single-provider to a multi-provider architecture and grew several
@@ -209,8 +209,7 @@ production-ready surfaces.
 - **Post-analysis report saving** — the framework writes per-section markdown
   files (analyst reports, debate transcripts, final decision) when a run
   completes.
-- **Announcements panel** — fetches updates from `api.tauric.ai/v1/announcements`
-  for the CLI welcome screen.
+- **Announcements panel** for the CLI welcome screen.
 - **Tool fallbacks** so a single vendor outage does not stop the pipeline.
 
 ### Changed
@@ -240,14 +239,14 @@ PRs from late 2025 also landed here.
 - [@csoboy](https://github.com/csoboy) — local Ollama setup (#53)
 - [@chauhang](https://github.com/chauhang) — initial Docker support attempt (#47, later reverted; the merged Docker support shipped in v0.2.4)
 
-## [0.1.1] — 2025-06-07
+## 0.1.1 — 2025-06-07
 
 ### Removed
 
 - Static site assets that had been bundled with v0.1.0; the public site now
   lives separately.
 
-## [0.1.0] — 2025-06-05
+## 0.1.0 — 2025-06-05
 
 ### Added
 
@@ -257,10 +256,3 @@ PRs from late 2025 also landed here.
   portfolio manager. LangGraph orchestration, yfinance data, per-agent
   BM25 memory, single-provider OpenAI integration, interactive CLI.
 
-[0.2.4]: https://github.com/TauricResearch/TradingAgents/compare/v0.2.3...v0.2.4
-[0.2.3]: https://github.com/TauricResearch/TradingAgents/compare/v0.2.2...v0.2.3
-[0.2.2]: https://github.com/TauricResearch/TradingAgents/compare/v0.2.1...v0.2.2
-[0.2.1]: https://github.com/TauricResearch/TradingAgents/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/TauricResearch/TradingAgents/compare/v0.1.1...v0.2.0
-[0.1.1]: https://github.com/TauricResearch/TradingAgents/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/TauricResearch/TradingAgents/releases/tag/v0.1.0

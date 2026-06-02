@@ -49,7 +49,11 @@ export function ProposalsPanel() {
 
   return (
     <div className="card">
-      <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="card-title" style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+      }}>
         <span>Proposals</span>
         <select value={filter} onChange={(e) => setFilter(e.target.value as Filter)}>
           <option value="pending">Pending</option>
@@ -60,16 +64,19 @@ export function ProposalsPanel() {
       </div>
 
       {error && (
-        <div style={{ color: 'var(--danger-color)', padding: 10 }}>⚠️ {error}</div>
+        <div className="alert-banner">⚠️ {error}</div>
       )}
 
       {rows.length === 0 ? (
-        <div style={{ padding: 20, color: 'var(--text-secondary)' }}>No {filter} proposals.</div>
+        <div style={{ padding: 24, color: 'var(--color-text-muted)' }}>
+          No {filter} proposals.
+        </div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 12 }}>
+        <table className="table" style={{ marginTop: 12 }}>
           <thead>
-            <tr style={{ textAlign: 'left', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-              <th>id</th><th>proposed_at</th><th>change</th><th>rationale</th><th>status</th><th></th>
+            <tr>
+              <th>ID</th><th>Proposed at</th><th>Change</th><th>Rationale</th>
+              <th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -79,35 +86,63 @@ export function ProposalsPanel() {
                 ? `${key}: ${String(p.diff![key].from)} → ${String(p.diff![key].to)}`
                 : '—'
               const status = p.applied
-                ? <span style={{ color: 'var(--success-color)' }}>applied {fmtTs(p.applied_at)}</span>
+                ? <span className="action-badge executed">applied {fmtTs(p.applied_at)}</span>
                 : p.rejected_at
-                ? <span style={{ color: 'var(--danger-color)' }}>rejected {fmtTs(p.rejected_at)}</span>
-                : <span style={{ color: 'var(--warning-color, #c2a000)' }}>pending</span>
+                ? <span className="action-badge rejected">rejected {fmtTs(p.rejected_at)}</span>
+                : <span className="action-badge pending">pending</span>
               const showActions = !p.applied && !p.rejected_at
               return (
-                <tr key={p.id} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td>{p.id}</td>
-                  <td>{fmtTs(p.proposed_at)}</td>
-                  <td><code>{change}</code></td>
-                  <td style={{ maxWidth: 320 }}>{p.rationale || '—'}</td>
+                <tr key={p.id}>
+                  <td style={{ color: 'var(--color-text-muted)' }}>{p.id}</td>
+                  <td style={{ color: 'var(--color-text-dim)' }}>{fmtTs(p.proposed_at)}</td>
+                  <td>
+                    <code style={{
+                      padding: '2px 8px',
+                      borderRadius: 4,
+                      background: 'var(--color-background)',
+                      border: '1px solid var(--color-border)',
+                      color: 'var(--color-primary)',
+                      fontSize: '0.82rem',
+                    }}>
+                      {change}
+                    </code>
+                  </td>
+                  <td style={{ maxWidth: 320, color: 'var(--color-text-dim)' }}>
+                    {p.rationale || '—'}
+                  </td>
                   <td>{status}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     {showActions && (
-                      <>
+                      <div style={{ display: 'flex', gap: 6 }}>
                         <button
                           onClick={() => onApprove(p.id)}
                           disabled={busyId === p.id}
-                          style={{ marginRight: 6 }}
+                          className="btn"
+                          style={{ padding: '5px 12px', fontSize: '0.78rem' }}
                         >
                           Approve
                         </button>
-                        <button onClick={() => onReject(p.id)} disabled={busyId === p.id}>
+                        <button
+                          onClick={() => onReject(p.id)}
+                          disabled={busyId === p.id}
+                          className="btn btn-ghost"
+                          style={{
+                            padding: '5px 12px',
+                            fontSize: '0.78rem',
+                            color: 'var(--color-loss)',
+                            borderColor: 'color-mix(in srgb, var(--color-loss) 50%, transparent 50%)',
+                          }}
+                        >
                           Reject
                         </button>
-                      </>
+                      </div>
                     )}
                     {p.rejection_reason && (
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      <div style={{
+                        fontSize: '0.78rem',
+                        color: 'var(--color-text-muted)',
+                        marginTop: 4,
+                      }}>
                         {p.rejection_reason}
                       </div>
                     )}

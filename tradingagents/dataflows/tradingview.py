@@ -4,7 +4,7 @@ TradingView data provider using tvdatafeed.
 Fetches OHLCV data directly from TradingView for forex pairs, commodities,
 and other instruments not well-supported by yfinance.
 
-Install: pip install tvdatafeed
+Install: pip install tradingview-datafeed
 """
 
 import logging
@@ -59,18 +59,18 @@ TV_EXCHANGE_MAP = {
 def _get_tv_client():
     """Get TradingView data feed client."""
     try:
-        from tvdatafeed import TvDatafeed
+        from tvDatafeed import TvDatafeed
         return TvDatafeed()
     except ImportError:
         raise ImportError(
-            "tvdatafeed is not installed. Run: pip install tvdatafeed"
+            "TradingView datafeed is not installed. Run: pip install tradingview-datafeed"
         )
 
 
 def _get_tv_interval(days_range: int):
     """Select appropriate TradingView interval based on date range requested."""
     try:
-        from tvdatafeed import Interval
+        from tvDatafeed import Interval
         if days_range <= 5:
             return Interval.in_15_minute, 5 * 24 * 4   # 15-min bars
         elif days_range <= 30:
@@ -80,7 +80,7 @@ def _get_tv_interval(days_range: int):
         else:
             return Interval.in_daily, days_range + 30   # Daily bars
     except ImportError:
-        raise ImportError("tvdatafeed is not installed. Run: pip install tvdatafeed")
+        raise ImportError("TradingView datafeed is not installed. Run: pip install tradingview-datafeed")
 
 
 def _resolve_exchange(symbol: str) -> str:

@@ -356,9 +356,7 @@ class ExecutionEngine:
 
     def _get_open_positions(self) -> List[Position]:
         """Get all open positions from MT5."""
-        # In a real implementation, would fetch from MT5
-        # For now, return empty (would be implemented per symbol)
-        return []
+        return self.connector.get_positions()
 
     def _log_execution(
         self,

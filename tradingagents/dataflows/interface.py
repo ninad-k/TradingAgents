@@ -24,6 +24,7 @@ from .alpha_vantage import (
 )
 from .alpha_vantage_common import AlphaVantageRateLimitError
 from .tradingview import get_tradingview_data, get_tradingview_indicators
+from .mt5_market_data import get_mt5_market_data
 
 # Configuration and routing logic
 from .config import get_config
@@ -62,24 +63,27 @@ TOOLS_CATEGORIES = {
 }
 
 VENDOR_LIST = [
+    "tradingview",
+    "mt5",
     "yfinance",
     "alpha_vantage",
-    "tradingview",
 ]
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
-    # core_stock_apis
+    # core_stock_apis — priority: tradingview → mt5 → yfinance → alpha_vantage
     "get_stock_data": {
         "tradingview": get_tradingview_data,
-        "alpha_vantage": get_alpha_vantage_stock,
+        "mt5": get_mt5_market_data,
         "yfinance": get_YFin_data_online,
+        "alpha_vantage": get_alpha_vantage_stock,
     },
-    # technical_indicators
+    # technical_indicators — MT5 doesn't expose indicators directly, so the
+    # chain skips it for this method and falls straight from TV to yfinance.
     "get_indicators": {
         "tradingview": get_tradingview_indicators,
-        "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
+        "alpha_vantage": get_alpha_vantage_indicator,
     },
     # fundamental_data
     "get_fundamentals": {
@@ -135,22 +139,58 @@ def get_vendor(category: str, method: str = None) -> str:
     # Fall back to category-level configuration
     return config.get("data_vendors", {}).get(category, "default")
 
+_FAILURE_RESPONSE_MARKERS = (
+    "no tradingview data",
+    "error fetching",
+    "no mt5 data",
+    "no data found",
+    "not found",
+    "symbol may not exist",
+    "terminal not connected",
+    # Library-missing sentinels (e.g. tradingview-datafeed not pip-installed).
+    "not installed",
+    "tradingview datafeed",
+    "metatrader5 library not installed",
+    "import error",
+)
+
+
+def _looks_like_failure(result) -> bool:
+    """Some vendors swallow exceptions and return an error *string* instead of
+    raising. Detect those so the fallback chain can advance to the next vendor.
+    """
+    if result is None:
+        return True
+    if not isinstance(result, str):
+        return False
+    head = result.strip().lower()[:240]
+    return any(marker in head for marker in _FAILURE_RESPONSE_MARKERS)
+
+
 def route_to_vendor(method: str, *args, **kwargs):
-    """Route method calls to appropriate vendor implementation with fallback support."""
+    """Route a tool call through the configured vendor chain.
+
+    Behavior: read the configured comma-separated vendor list (e.g.
+    ``"tradingview,mt5,yfinance"``) for this method's category, append any
+    remaining registered vendors as automatic fallback, and try each in order.
+    Advance to the next vendor when the current one (a) raises, or (b) returns
+    a string that looks like a "no data / error" sentinel — historically some
+    vendors swallow exceptions and the fallback never fired.
+    """
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)
-    primary_vendors = [v.strip() for v in vendor_config.split(',')]
+    primary_vendors = [v.strip() for v in vendor_config.split(',') if v.strip()]
 
     if method not in VENDOR_METHODS:
         raise ValueError(f"Method '{method}' not supported")
 
-    # Build fallback chain: primary vendors first, then remaining available vendors
     all_available_vendors = list(VENDOR_METHODS[method].keys())
-    fallback_vendors = primary_vendors.copy()
+    fallback_vendors = list(primary_vendors)
     for vendor in all_available_vendors:
         if vendor not in fallback_vendors:
             fallback_vendors.append(vendor)
 
+    last_failure_text = None
     for vendor in fallback_vendors:
         if vendor not in VENDOR_METHODS[method]:
             continue
@@ -159,8 +199,23 @@ def route_to_vendor(method: str, *args, **kwargs):
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
         try:
-            return impl_func(*args, **kwargs)
+            result = impl_func(*args, **kwargs)
         except AlphaVantageRateLimitError:
-            continue  # Only rate limits trigger fallback
+            last_failure_text = f"{vendor}: rate-limited"
+            continue
+        except Exception as e:  # noqa: BLE001 — yes, we deliberately catch all
+            last_failure_text = f"{vendor}: {e}"
+            continue
 
-    raise RuntimeError(f"No available vendor for '{method}'")
+        if _looks_like_failure(result):
+            # Keep the sentinel text in case nobody else succeeds — useful for
+            # surfacing the root cause back to the analyst LLM.
+            last_failure_text = f"{vendor}: {str(result)[:200]}"
+            continue
+
+        return result
+
+    return (
+        f"No vendor returned data for '{method}'. "
+        f"Last failure: {last_failure_text or 'unknown'}"
+    )

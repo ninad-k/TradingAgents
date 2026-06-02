@@ -15,13 +15,14 @@ Usage:
 """
 
 import logging
+import os
 from typing import Optional, Dict, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from abc import ABC, abstractmethod
 
 from tradingagents.brokers.models import (
     AccountInfo, SymbolInfo, Position, OrderStatus,
-    MT5Order, OrderAction, OrderType
+    MT5Order, OrderAction, OrderType, TradeRecord
 )
 from tradingagents.dataflows.config import get_config
 
@@ -62,6 +63,16 @@ class MT5ConnectorBase(ABC):
         pass
 
     @abstractmethod
+    def get_positions(self) -> List[Position]:
+        """Get all open positions."""
+        pass
+
+    @abstractmethod
+    def get_trade_history(self, days: int = 7, limit: int = 50) -> List[TradeRecord]:
+        """Get recent broker trade/deal history."""
+        pass
+
+    @abstractmethod
     def place_order(self, order: MT5Order) -> Dict:
         """Place order and return result."""
         pass
@@ -76,6 +87,19 @@ class MT5ConnectorBase(ABC):
         """Modify stop loss and take profit."""
         pass
 
+    @abstractmethod
+    def list_symbols(self, refresh: bool = False) -> List[Dict]:
+        """Return all symbols the broker exposes.
+
+        Each entry is a dict with: ``name``, ``description``, ``path``,
+        ``category`` (top-level folder, e.g. ``Forex``), ``currency_base``,
+        ``currency_profit``, ``digits``, ``visible``.
+
+        Results may be cached after the first call; pass ``refresh=True`` to
+        force a fresh fetch.
+        """
+        pass
+
 
 class NativeMT5Connector(MT5ConnectorBase):
     """
@@ -86,20 +110,21 @@ class NativeMT5Connector(MT5ConnectorBase):
     - MetaTrader5 Python package: pip install MetaTrader5
     """
 
-    def __init__(self, login: int, password: str, server: str):
+    def __init__(self, login: Optional[int] = None, password: Optional[str] = None, server: Optional[str] = None):
         """
         Initialize native MT5 connector.
 
         Args:
-            login: MT5 account login
-            password: MT5 account password
-            server: MT5 server (e.g., "ICMarkets-Demo", "ICMarkets-Live")
+            login: MT5 account login. Optional when attaching to an already-open terminal.
+            password: MT5 account password. Optional when attaching to an already-open terminal.
+            server: MT5 server. Optional when attaching to an already-open terminal.
         """
         self.login = login
         self.password = password
         self.server = server
         self._mt5 = None
         self._connected = False
+        self._symbols_cache: Optional[List[Dict]] = None
 
         # Try to import MT5
         try:
@@ -120,11 +145,15 @@ class NativeMT5Connector(MT5ConnectorBase):
             return False
 
         try:
-            if not self._mt5.initialize(
-                login=self.login,
-                password=self.password,
-                server=self.server
-            ):
+            init_kwargs = {}
+            if self.login and self.password and self.server:
+                init_kwargs = {
+                    "login": self.login,
+                    "password": self.password,
+                    "server": self.server,
+                }
+
+            if not self._mt5.initialize(**init_kwargs):
                 logger.error(f"Failed to initialize MT5: {self._mt5.last_error()}")
                 return False
 
@@ -245,6 +274,141 @@ class NativeMT5Connector(MT5ConnectorBase):
             logger.error(f"Error getting position for {symbol}: {e}")
             return None
 
+    def get_positions(self) -> List[Position]:
+        """Get all open MT5 positions."""
+        if not self.is_connected():
+            return []
+
+        try:
+            positions = self._mt5.positions_get()
+            if not positions:
+                return []
+            return [self._position_from_mt5(pos) for pos in positions]
+        except Exception as e:
+            logger.error(f"Error getting open positions: {e}")
+            return []
+
+    def list_symbols(self, refresh: bool = False) -> List[Dict]:
+        """Snapshot all broker symbols. Cached after first call.
+
+        Cache is invalidated when ``refresh=True``. Reads via ``mt5.symbols_get``
+        which returns SymbolInfo tuples; we coerce to a JSON-friendly dict so
+        the API can serve it directly.
+        """
+        if self._symbols_cache is not None and not refresh:
+            return self._symbols_cache
+        if not self.is_connected() and not self.connect():
+            return []
+        try:
+            raw = self._mt5.symbols_get() or []
+        except Exception as e:
+            logger.error(f"Error listing broker symbols: {e}")
+            return []
+        entries: List[Dict] = []
+        for sym in raw:
+            path = getattr(sym, "path", "") or ""
+            # First segment of path is the broker category, e.g. "Forex\\Majors\\EURUSD" → "Forex"
+            category = path.split("\\")[0] if path else ""
+            entries.append({
+                "name": getattr(sym, "name", ""),
+                "description": getattr(sym, "description", "") or "",
+                "path": path,
+                "category": category,
+                "currency_base": getattr(sym, "currency_base", "") or "",
+                "currency_profit": getattr(sym, "currency_profit", "") or "",
+                "digits": int(getattr(sym, "digits", 0) or 0),
+                "visible": bool(getattr(sym, "visible", False)),
+            })
+        # Sort by category then name so the picker is browsable.
+        entries.sort(key=lambda e: (e["category"], e["name"]))
+        self._symbols_cache = entries
+        return entries
+
+    def _position_from_mt5(self, pos) -> Position:
+        # MT5 returns Unix epoch seconds; use UTC to match `datetime.utcnow()`
+        # used elsewhere in the dashboard. profit_percent is set to 0.0
+        # because computing it correctly needs margin-at-open, which the
+        # MT5 position struct doesn't expose; the dashboard already shows
+        # the absolute profit field.
+        return Position(
+            ticket=pos.ticket,
+            symbol=pos.symbol,
+            type=OrderAction.BUY if pos.type == 0 else OrderAction.SELL,
+            volume=float(pos.volume),
+            entry_price=float(pos.price_open),
+            current_price=float(pos.price_current),
+            profit=float(pos.profit),
+            profit_percent=0.0,
+            stop_loss=float(pos.sl) if pos.sl else None,
+            take_profit=float(pos.tp) if pos.tp else None,
+            open_time=datetime.utcfromtimestamp(pos.time),
+            open_comment=getattr(pos, "comment", None),
+        )
+
+    def get_trade_history(self, days: int = 7, limit: int = 50) -> List[TradeRecord]:
+        """Pair MT5 deals by position_id and return round-trip TradeRecords."""
+        if not self.is_connected():
+            return []
+
+        try:
+            now = datetime.utcnow()
+            deals = self._mt5.history_deals_get(now - timedelta(days=days), now)
+            if not deals:
+                return []
+
+            deal_entry_in = getattr(self._mt5, "DEAL_ENTRY_IN", 0)
+            deal_entry_out = getattr(self._mt5, "DEAL_ENTRY_OUT", 1)
+
+            # Walk deals oldest-first so the IN deal always lands before its OUT.
+            grouped: Dict[int, TradeRecord] = {}
+            for deal in sorted(deals, key=lambda d: d.time):
+                # Skip balance/credit/commission deals that aren't trades.
+                if getattr(deal, "symbol", "") == "":
+                    continue
+                position_id = int(getattr(deal, "position_id", deal.ticket) or deal.ticket)
+                deal_type = getattr(deal, "type", None)
+                action = OrderAction.BUY if deal_type == self._mt5.DEAL_TYPE_BUY else OrderAction.SELL
+                entry_flag = getattr(deal, "entry", None)
+                deal_time = datetime.utcfromtimestamp(deal.time)
+                price = float(deal.price)
+                profit = float(getattr(deal, "profit", 0.0) or 0.0)
+                comment = getattr(deal, "comment", None)
+
+                existing = grouped.get(position_id)
+                if existing is None:
+                    # First deal seen for this position — treat as entry.
+                    grouped[position_id] = TradeRecord(
+                        symbol=deal.symbol,
+                        action=action,
+                        volume=float(deal.volume),
+                        entry_price=price,
+                        entry_time=deal_time,
+                        status="closed" if entry_flag == deal_entry_out else "open",
+                        ticket=int(deal.ticket),
+                        position_id=position_id,
+                        profit=profit if entry_flag == deal_entry_out else None,
+                        comment=comment,
+                    )
+                    # If the only deal we have is an OUT (rare — partial history
+                    # window), exit_* mirrors entry_* so the dashboard at least
+                    # shows the exit price.
+                    if entry_flag == deal_entry_out:
+                        grouped[position_id].exit_price = price
+                        grouped[position_id].exit_time = deal_time
+                else:
+                    # Subsequent deal — treat as the closing leg.
+                    existing.exit_price = price
+                    existing.exit_time = deal_time
+                    existing.status = "closed"
+                    existing.profit = (existing.profit or 0.0) + profit
+
+            # Newest entries first; apply caller's limit.
+            records = sorted(grouped.values(), key=lambda r: r.entry_time, reverse=True)
+            return records[:limit]
+        except Exception as e:
+            logger.error(f"Error getting trade history: {e}")
+            return []
+
     def place_order(self, order: MT5Order) -> Dict:
         """Place order on MT5."""
         if not self.is_connected():
@@ -261,12 +425,16 @@ class NativeMT5Connector(MT5ConnectorBase):
                 OrderType.LIMIT: self._mt5.ORDER_TYPE_BUY_LIMIT if order.action == OrderAction.BUY else self._mt5.ORDER_TYPE_SELL_LIMIT,
             }.get(order.order_type, self._mt5.ORDER_TYPE_BUY if order.action == OrderAction.BUY else self._mt5.ORDER_TYPE_SELL)
 
+            price = order.entry_price
+            if price is None:
+                price = symbol_info.ask if order.action == OrderAction.BUY else symbol_info.bid
+
             request = {
                 "action": self._mt5.TRADE_ACTION_DEAL,
                 "symbol": order.symbol,
                 "volume": order.volume,
                 "type": mt5_order_type,
-                "price": order.entry_price or symbol_info.ask if order.action == OrderAction.BUY else symbol_info.bid,
+                "price": price,
                 "sl": order.stop_loss,
                 "tp": order.take_profit,
                 "comment": order.comment or f"TradingAgents:{order.decision_id}",
@@ -361,6 +529,9 @@ class MockMT5Connector(MT5ConnectorBase):
         self.account_type = account_type
         self._connected = False
         self._positions: Dict[int, Position] = {}
+        # Keyed by ticket (used as position_id in the mock) so close_position
+        # can update the same record rather than appending a sibling.
+        self._trade_history: Dict[int, TradeRecord] = {}
         self._next_ticket = 1000
 
     def connect(self) -> bool:
@@ -437,6 +608,19 @@ class MockMT5Connector(MT5ConnectorBase):
                 return pos
         return None
 
+    def get_positions(self) -> List[Position]:
+        """Return all mock positions."""
+        if not self.is_connected():
+            return []
+        return list(self._positions.values())
+
+    def get_trade_history(self, days: int = 7, limit: int = 50) -> List[TradeRecord]:
+        """Return mock trade history, newest entry first."""
+        if not self.is_connected():
+            return []
+        records = sorted(self._trade_history.values(), key=lambda r: r.entry_time, reverse=True)
+        return records[:limit]
+
     def place_order(self, order: MT5Order) -> Dict:
         """Mock place order."""
         if not self.is_connected():
@@ -444,13 +628,48 @@ class MockMT5Connector(MT5ConnectorBase):
 
         ticket = self._next_ticket
         self._next_ticket += 1
+        symbol_info = self.get_symbol_info(order.symbol)
+        price = order.entry_price
+        if price is None and symbol_info:
+            price = symbol_info.ask if order.action == OrderAction.BUY else symbol_info.bid
+        if price is None:
+            price = 100.0
+
+        position = Position(
+            ticket=ticket,
+            symbol=order.symbol,
+            type=order.action,
+            volume=order.volume,
+            entry_price=price,
+            current_price=price,
+            profit=0.0,
+            profit_percent=0.0,
+            stop_loss=order.stop_loss,
+            take_profit=order.take_profit,
+            open_time=datetime.utcnow(),
+            open_comment=order.comment,
+            decision_id=order.decision_id,
+        )
+        self._positions[ticket] = position
+        self._trade_history[ticket] = TradeRecord(
+            symbol=order.symbol,
+            action=order.action,
+            volume=order.volume,
+            entry_price=price,
+            entry_time=position.open_time,
+            status="open",
+            ticket=ticket,
+            position_id=ticket,
+            profit=None,
+            comment=order.comment,
+        )
 
         logger.info(f"Mock order placed: {order.action} {order.volume} {order.symbol} @ ticket {ticket}")
         return {
             "status": "executed",
             "ticket": ticket,
             "volume": order.volume,
-            "price": order.entry_price or 100.0,
+            "price": price,
         }
 
     def close_position(self, ticket: int, volume: float) -> Dict:
@@ -459,7 +678,30 @@ class MockMT5Connector(MT5ConnectorBase):
             return {"status": "error", "message": "Not connected"}
 
         if ticket in self._positions:
-            del self._positions[ticket]
+            position = self._positions.pop(ticket)
+            now = datetime.utcnow()
+            existing = self._trade_history.get(ticket)
+            if existing is not None:
+                existing.exit_price = position.current_price
+                existing.exit_time = now
+                existing.status = "closed"
+                existing.profit = position.profit
+            else:
+                # No open-side record (shouldn't normally happen); synthesize one.
+                self._trade_history[ticket] = TradeRecord(
+                    symbol=position.symbol,
+                    action=position.type,
+                    volume=volume,
+                    entry_price=position.entry_price,
+                    entry_time=position.open_time,
+                    exit_price=position.current_price,
+                    exit_time=now,
+                    status="closed",
+                    ticket=ticket,
+                    position_id=ticket,
+                    profit=position.profit,
+                    comment=position.open_comment,
+                )
             logger.info(f"Mock position closed: ticket {ticket}")
             return {"status": "closed"}
         return {"status": "error", "message": f"Position {ticket} not found"}
@@ -471,6 +713,31 @@ class MockMT5Connector(MT5ConnectorBase):
 
         logger.info(f"Mock order modified: ticket {ticket}, SL={sl}, TP={tp}")
         return {"status": "modified"}
+
+    def list_symbols(self, refresh: bool = False) -> List[Dict]:
+        """Return a small canned universe so tests and demo runs have data."""
+        catalog = [
+            ("EURUSD", "Euro vs US Dollar",            "Forex\\Majors\\EURUSD",     "Forex",      "EUR", "USD", 5),
+            ("GBPUSD", "British Pound vs US Dollar",   "Forex\\Majors\\GBPUSD",     "Forex",      "GBP", "USD", 5),
+            ("USDJPY", "US Dollar vs Japanese Yen",    "Forex\\Majors\\USDJPY",     "Forex",      "USD", "JPY", 3),
+            ("AUDUSD", "Australian Dollar vs USD",     "Forex\\Majors\\AUDUSD",     "Forex",      "AUD", "USD", 5),
+            ("USDCAD", "US Dollar vs Canadian Dollar", "Forex\\Majors\\USDCAD",     "Forex",      "USD", "CAD", 5),
+            ("XAUUSD", "Gold vs US Dollar",            "Metals\\XAUUSD",            "Metals",     "XAU", "USD", 2),
+            ("XAGUSD", "Silver vs US Dollar",          "Metals\\XAGUSD",            "Metals",     "XAG", "USD", 3),
+            ("BTCUSD", "Bitcoin vs US Dollar",         "Crypto\\BTCUSD",            "Crypto",     "BTC", "USD", 2),
+            ("ETHUSD", "Ethereum vs US Dollar",        "Crypto\\ETHUSD",            "Crypto",     "ETH", "USD", 2),
+            ("NAS100", "Nasdaq 100 Index",             "Indices\\NAS100",           "Indices",    "USD", "USD", 2),
+            ("US500",  "S&P 500 Index",                "Indices\\US500",            "Indices",    "USD", "USD", 2),
+            ("USOIL",  "WTI Crude Oil",                "Commodities\\USOIL",        "Commodities","USD", "USD", 2),
+        ]
+        return [
+            {
+                "name": n, "description": d, "path": p, "category": c,
+                "currency_base": cb, "currency_profit": cp, "digits": dg,
+                "visible": True,
+            }
+            for n, d, p, c, cb, cp, dg in catalog
+        ]
 
 
 class MT5Connector:
@@ -494,10 +761,17 @@ class MT5Connector:
             server: MT5 server (optional if using mock)
             use_mock: Force use of mock connector
         """
+        login = login if login is not None else self._env_int("MT5_LOGIN")
+        password = password if password is not None else os.getenv("MT5_PASSWORD")
+        server = server if server is not None else os.getenv("MT5_SERVER")
+        env_use_mock = os.getenv("MT5_USE_MOCK")
+        if env_use_mock is not None:
+            use_mock = env_use_mock.strip().lower() in {"1", "true", "yes", "on"}
+
         # Use provided account_type or read from config
         if account_type is None:
             config = get_config()
-            trading_mode = config.get("trading_mode", "paper")
+            trading_mode = os.getenv("MT5_ACCOUNT_TYPE") or config.get("trading_mode", "paper")
             # Map paper/live to demo/live convention
             account_type = "demo" if trading_mode == "paper" else "live"
 
@@ -516,16 +790,22 @@ class MT5Connector:
             logger.info("Using mock MT5 connector (development mode)")
         else:
             # Try native connector first
+            self._connector = NativeMT5Connector(login, password, server)
             if login and password and server:
-                self._connector = NativeMT5Connector(login, password, server)
-                logger.info("Using native MT5 connector")
+                logger.info("Using native MT5 connector with configured credentials")
             else:
-                # Fall back to mock
-                self._connector = MockMT5Connector(self.account_type)
-                logger.warning(
-                    "Credentials not provided, using mock connector. "
-                    "To use native MT5, provide login, password, and server."
-                )
+                logger.info("Using native MT5 connector with the currently open terminal session")
+
+    @staticmethod
+    def _env_int(name: str) -> Optional[int]:
+        value = os.getenv(name)
+        if not value:
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            logger.warning("Invalid integer for %s: %s", name, value)
+            return None
 
     def connect(self) -> bool:
         """Connect to MT5."""
@@ -551,6 +831,14 @@ class MT5Connector:
         """Get position for symbol."""
         return self._connector.get_position(symbol)
 
+    def get_positions(self) -> List[Position]:
+        """Get all open positions."""
+        return self._connector.get_positions()
+
+    def get_trade_history(self, days: int = 7, limit: int = 50) -> List[TradeRecord]:
+        """Get recent broker trade history."""
+        return self._connector.get_trade_history(days=days, limit=limit)
+
     def place_order(self, order: MT5Order) -> Dict:
         """Place order."""
         return self._connector.place_order(order)
@@ -562,3 +850,18 @@ class MT5Connector:
     def modify_order(self, ticket: int, sl: float, tp: float) -> Dict:
         """Modify order."""
         return self._connector.modify_order(ticket, sl, tp)
+
+    def list_symbols(self, refresh: bool = False) -> List[Dict]:
+        """List all broker symbols (cached after first call)."""
+        return self._connector.list_symbols(refresh=refresh)
+
+
+_SHARED_CONNECTOR: Optional[MT5Connector] = None
+
+
+def get_shared_mt5_connector(account_type: Optional[str] = None) -> MT5Connector:
+    """Return the process-wide broker connector used by API and scheduler."""
+    global _SHARED_CONNECTOR
+    if _SHARED_CONNECTOR is None:
+        _SHARED_CONNECTOR = MT5Connector(account_type=account_type)
+    return _SHARED_CONNECTOR

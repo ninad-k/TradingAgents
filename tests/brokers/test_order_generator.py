@@ -112,6 +112,7 @@ def test_decision_to_order_xauusd_risk_matches_percent():
     assert order.volume > 1.0  # ~1.67 lots; the old bug gave ~0.17
     # Max loss should land near the intended 2% of $10k = $200 (volume rounding aside)
     assert 190.0 <= order.max_loss_per_trade <= 210.0
+    assert order.comment == "TradingAgent2.0"
 
 
 def test_propose_order_risk_per_trade_is_instrument_correct():

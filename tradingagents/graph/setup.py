@@ -34,12 +34,26 @@ class GraphSetup:
         Args:
             selected_analysts (list): List of analyst types to include. Options are:
                 - "market": Market analyst
-                - "social": Social media analyst
+                - "social": Social media / sentiment analyst (also accepts "sentiment")
                 - "news": News analyst
                 - "fundamentals": Fundamentals analyst
         """
         if len(selected_analysts) == 0:
             raise ValueError("Trading Agents Graph Setup Error: no analysts selected!")
+
+        # Normalize callers that pass the dashboard-facing name "sentiment"
+        # — the internal node + ConditionalLogic method are both "social", so
+        # without this alias the graph blows up with
+        # `'ConditionalLogic' object has no attribute 'should_continue_sentiment'`.
+        # Also dedupes if both names get passed.
+        seen = set()
+        normalized = []
+        for a in selected_analysts:
+            a_norm = "social" if a == "sentiment" else a
+            if a_norm not in seen:
+                seen.add(a_norm)
+                normalized.append(a_norm)
+        selected_analysts = normalized
 
         # Create analyst nodes
         analyst_nodes = {}

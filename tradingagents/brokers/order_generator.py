@@ -9,6 +9,7 @@ Handles:
 """
 
 import logging
+import os
 from typing import Optional, Tuple
 from datetime import datetime, timedelta
 
@@ -41,16 +42,38 @@ class OrderGenerator:
         PortfolioRating.SELL: 0.05,         # 5% of account
     }
 
-    def __init__(self, max_risk_percent: float = 2.0, max_risk_usd: Optional[float] = None):
+    def __init__(
+        self,
+        max_risk_percent: float = 2.0,
+        max_risk_usd: Optional[float] = None,
+        trade_comment: Optional[str] = None,
+        fixed_lot_size: Optional[float] = None,
+    ):
         """
         Initialize OrderGenerator.
 
         Args:
             max_risk_percent: Max % of account to risk per trade (default 2%)
             max_risk_usd: Max USD to risk per trade (optional, overrides percent)
+            trade_comment: Comment string attached to the MT5 order
+            fixed_lot_size: If > 0, every BUY/SELL is sized at this many lots and
+                the risk-based sizing math is bypassed entirely. Useful while
+                per-symbol risk parameters are still being tuned. Falls back to
+                the TRADINGAGENTS_FIXED_LOT_SIZE env var when not supplied.
         """
         self.max_risk_percent = max_risk_percent
         self.max_risk_usd = max_risk_usd
+        self.trade_comment = trade_comment or os.getenv("TRADINGAGENTS_TRADE_COMMENT", "TradingAgent2.0")
+        if fixed_lot_size is None:
+            env_lot = os.getenv("TRADINGAGENTS_FIXED_LOT_SIZE", "").strip()
+            try:
+                fixed_lot_size = float(env_lot) if env_lot else None
+            except ValueError:
+                logger.warning("Invalid TRADINGAGENTS_FIXED_LOT_SIZE=%r — ignoring", env_lot)
+                fixed_lot_size = None
+        self.fixed_lot_size = fixed_lot_size if (fixed_lot_size and fixed_lot_size > 0) else None
+        if self.fixed_lot_size:
+            logger.info("OrderGenerator: fixed lot override = %.3f lots/trade", self.fixed_lot_size)
 
     @staticmethod
     def _pip_value_per_lot(symbol_info: SymbolInfo) -> Optional[float]:
@@ -127,7 +150,7 @@ class OrderGenerator:
             take_profit=take_profit,
             decision_id=decision_id,
             reason=decision.executive_summary,
-            comment=f"TradingAgents:{decision.rating.value}",
+            comment=self.trade_comment,
             # Risk management
             max_holding_time_hours=self._parse_time_horizon(decision.time_horizon),
             max_loss_per_trade=self._calculate_loss_amount(entry_price or symbol_info.ask, stop_loss, volume, symbol_info),
@@ -220,6 +243,14 @@ class OrderGenerator:
         Returns:
             Volume in lots
         """
+        # Fixed-lot override: bypass risk math and clamp only to the broker's
+        # volume_min/volume_max/volume_step so we always send a legal request.
+        if self.fixed_lot_size:
+            volume = self.fixed_lot_size
+            volume = max(symbol_info.min_volume, min(volume, symbol_info.max_volume))
+            volume = round(volume / symbol_info.volume_step) * symbol_info.volume_step
+            return volume
+
         if not entry_price or not stop_loss:
             # If no stop loss, use fixed % of account
             size_percent = 0.02  # 2% default

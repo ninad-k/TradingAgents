@@ -24,7 +24,7 @@ class WatchlistEntry:
     """Configuration for a single monitored symbol."""
     symbol: str
     display_name: str
-    mode: str              # "forex", "commodity", "stock"
+    mode: str              # "forex", "commodity", "crypto", "index", "stock"
     interval_hours: int
     analysts: List[str]
     use_tradingview: bool
@@ -34,38 +34,60 @@ class WatchlistEntry:
     last_signal: Optional[str] = None
 
 
-# Default forex/commodity analyst set (no fundamentals — not applicable)
-FOREX_ANALYSTS = ["market"]
-FOREX_ANALYSTS_WITH_NEWS = ["market", "news"]
+# Analyst lineups per mode. Names match the graph's internal node keys
+# (``social`` is the sentiment analyst node — don't rename to ``sentiment``,
+# the graph routing breaks). Macro instruments get the same depth as stocks
+# minus a custom fundamentals lens handled by fundamentals_analyst.py.
+MACRO_ANALYSTS = ["market", "news", "social", "fundamentals"]
 STOCK_ANALYSTS = ["market", "social", "news", "fundamentals"]
+# Kept for backward-compatible imports.
+MACRO_ANALYSTS_WITH_NEWS = MACRO_ANALYSTS
+FAST_ANALYSTS = ["market"]
+
+
+def _analysts_for_mode(mode: str) -> List[str]:
+    """Pick the default analyst lineup based on instrument mode.
+
+    Auto-heals legacy single-analyst rows: any existing row read back from the
+    store gets re-classified here, so stored ``analysts=["market"]`` rows from
+    the old default automatically gain news + sentiment + fundamentals on next
+    load without needing a migration step. Stocks and macro instruments share
+    the same node names so the LangGraph wiring is identical.
+    """
+    if mode == "stock":
+        return list(STOCK_ANALYSTS)
+    return list(MACRO_ANALYSTS)
 
 
 def _make_entry(symbol: str, interval_hours: int = 4, include_news: bool = False) -> WatchlistEntry:
+    """Build a WatchlistEntry with the right analyst lineup for the symbol."""
     mode = detect_symbol_mode(symbol)
     use_tv = is_tradingview_symbol(symbol)
-
-    if mode in ("forex", "commodity"):
-        analysts = FOREX_ANALYSTS_WITH_NEWS if include_news else FOREX_ANALYSTS
-    else:
-        analysts = STOCK_ANALYSTS
 
     return WatchlistEntry(
         symbol=symbol.upper(),
         display_name=get_symbol_display_name(symbol),
         mode=mode,
         interval_hours=interval_hours,
-        analysts=analysts,
+        analysts=_analysts_for_mode(mode),
         use_tradingview=use_tv,
     )
 
 
 def _entry_from_row(row: Dict) -> WatchlistEntry:
+    """Hydrate from the persisted row but always re-derive the analyst lineup.
+
+    The store still keeps whatever it last saved, but we recompute analysts on
+    read so widening the defaults (or fixing a misclassification) takes effect
+    immediately without a manual re-add.
+    """
+    mode = row["mode"]
     return WatchlistEntry(
         symbol=row["symbol"],
         display_name=row["display_name"],
-        mode=row["mode"],
+        mode=mode,
         interval_hours=row["interval_hours"],
-        analysts=row["analysts"],
+        analysts=_analysts_for_mode(mode),
         use_tradingview=row["use_tradingview"],
         enabled=row["enabled"],
         last_analysis=row["last_analysis"],
@@ -76,13 +98,9 @@ def _entry_from_row(row: Dict) -> WatchlistEntry:
 
 _DEFAULT_SEED = [
     # Gold — start here per user request
-    ("XAUUSD", 4, True),
+    ("XAUUSD", 0, True),
     # Major forex pairs
-    ("EURUSD", 4, False),
-    ("GBPUSD", 4, False),
-    ("USDJPY", 4, False),
-    ("USDCHF", 4, False),
-    ("AUDUSD", 4, False),
+    ("BTCUSD", 0, True),
 ]
 
 
@@ -91,12 +109,18 @@ class Watchlist:
 
     def __init__(self):
         self._seed_if_empty()
+        self._ensure_default_entries()
 
     def _seed_if_empty(self) -> None:
         if store.watchlist_count() > 0:
             return
         for symbol, hours, news in _DEFAULT_SEED:
             store.save_watchlist_entry(_make_entry(symbol, hours, news))
+
+    def _ensure_default_entries(self) -> None:
+        for symbol, hours, news in _DEFAULT_SEED:
+            if self.get(symbol) is None:
+                store.save_watchlist_entry(_make_entry(symbol, hours, news))
 
     def add(self, symbol: str, interval_hours: int = 4, include_news: bool = False) -> WatchlistEntry:
         entry = _make_entry(symbol, interval_hours, include_news)
@@ -124,7 +148,8 @@ class Watchlist:
                 due.append(entry)
                 continue
             elapsed = now - entry.last_analysis
-            if elapsed.total_seconds() >= entry.interval_hours * 3600:
+            interval_seconds = 60 if entry.interval_hours <= 0 else entry.interval_hours * 3600
+            if elapsed.total_seconds() >= interval_seconds:
                 due.append(entry)
         return due
 
@@ -138,21 +163,28 @@ class Watchlist:
         store.save_watchlist_entry(entry)
 
     def to_dict_list(self) -> List[Dict]:
-        return [
-            {
-                "symbol": e.symbol,
-                "display_name": e.display_name,
-                "mode": e.mode,
-                "interval_hours": e.interval_hours,
-                "analysts": e.analysts,
-                "use_tradingview": e.use_tradingview,
-                "enabled": e.enabled,
-                "last_analysis": e.last_analysis.isoformat() if e.last_analysis else None,
-                "last_decision": e.last_decision,
-                "last_signal": e.last_signal,
-            }
-            for e in self.all()
-        ]
+        entries = []
+        for e in self.all():
+            # Recompute broker-derived fields at read time so older persisted
+            # rows do not keep stale static classifications such as BTCUSD=forex.
+            mode = detect_symbol_mode(e.symbol)
+            use_tradingview = mode in ("forex", "commodity", "crypto", "index")
+            entries.append(
+                {
+                    "symbol": e.symbol,
+                    "display_name": get_symbol_display_name(e.symbol),
+                    "mode": mode,
+                    "interval_hours": e.interval_hours,
+                    "interval_minutes": 1 if e.interval_hours <= 0 else e.interval_hours * 60,
+                    "analysts": _analysts_for_mode(mode),
+                    "use_tradingview": use_tradingview,
+                    "enabled": e.enabled,
+                    "last_analysis": e.last_analysis.isoformat() if e.last_analysis else None,
+                    "last_decision": e.last_decision,
+                    "last_signal": e.last_signal,
+                }
+            )
+        return entries
 
 
 # Global singleton — both processes import this, both hit the same SQLite file.

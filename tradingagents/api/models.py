@@ -34,6 +34,7 @@ class Trade(BaseModel):
     pnl_percent: Optional[float] = None
     duration_seconds: Optional[int] = None
     reason: Optional[str] = None
+    comment: Optional[str] = None
 
 
 class Position(BaseModel):
@@ -47,11 +48,13 @@ class Position(BaseModel):
     unrealized_pnl_percent: float
     entry_time: datetime
     duration_seconds: int
+    comment: Optional[str] = None
 
 
 class AccountStatus(BaseModel):
     """Account status model."""
     trading_mode: str
+    server: Optional[str] = None
     account_balance: float
     account_equity: float
     available_margin: float

@@ -31,7 +31,7 @@ def get_close_at(symbol: str, ts: datetime) -> Optional[float]:
 
 
 def _tv_close_at(symbol: str, ts: datetime) -> Optional[float]:
-    from tvdatafeed import TvDatafeed, Interval
+    from tvDatafeed import TvDatafeed, Interval
 
     from tradingagents.dataflows.tradingview import TV_EXCHANGE_MAP
 

@@ -138,6 +138,23 @@ class Position(BaseModel):
     decision_id: Optional[str] = Field(default=None, description="Linked TradingAgents decision ID")
 
 
+class TradeRecord(BaseModel):
+    """Broker trade record (round-trip) for dashboard display."""
+
+    symbol: str = Field(description="Symbol")
+    action: OrderAction = Field(description="BUY or SELL")
+    volume: float = Field(description="Volume/lot size")
+    entry_price: float = Field(description="Entry execution price")
+    entry_time: datetime = Field(description="Entry execution timestamp (UTC)")
+    exit_price: Optional[float] = Field(default=None, description="Exit price when closed")
+    exit_time: Optional[datetime] = Field(default=None, description="Exit timestamp when closed (UTC)")
+    status: str = Field(description="open, closed, failed, etc.")
+    ticket: Optional[int] = Field(default=None, description="Broker order ticket")
+    position_id: Optional[int] = Field(default=None, description="Broker position id (pairs entry+exit deals)")
+    profit: Optional[float] = Field(default=None, description="Realized P&L when available")
+    comment: Optional[str] = Field(default=None, description="Broker order/deal comment")
+
+
 class ExecutionResult(BaseModel):
     """Result of order execution."""
 
@@ -181,6 +198,7 @@ class PendingOrder(BaseModel):
 
     # Timing
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    approved_at: Optional[datetime] = Field(default=None, description="When the pending order was approved")
     expires_at: Optional[datetime] = Field(default=None, description="When approval expires")
 
 

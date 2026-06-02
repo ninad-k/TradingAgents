@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 from langgraph.prebuilt import ToolNode
 
 from tradingagents.llm_clients import create_llm_client
+from tradingagents.llm_clients.ollama_models import list_ollama_models
 
 from tradingagents.agents import *
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -24,6 +25,7 @@ from tradingagents.agents.utils.agent_states import (
     RiskDebateState,
 )
 from tradingagents.dataflows.config import set_config
+from tradingagents.monitor.symbols import is_tradingview_symbol
 
 # Import the new abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
@@ -65,7 +67,7 @@ class TradingAgentsGraph:
             callbacks: Optional list of callback handlers (e.g., for tracking LLM/tool stats)
         """
         self.debug = debug
-        self.config = config or DEFAULT_CONFIG
+        self.config = self._resolve_llm_config((config or DEFAULT_CONFIG).copy())
         self.callbacks = callbacks or []
 
         # Update the interface's config
@@ -128,6 +130,38 @@ class TradingAgentsGraph:
         self.workflow = self.graph_setup.setup_graph(selected_analysts)
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
+
+    def _resolve_llm_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply optional fallback model selection before LLM construction."""
+        if not config.get("llm_fallback_enabled", True):
+            return config
+
+        fallback_provider = config.get("fallback_llm_provider") or config.get("llm_provider")
+        prefer_fallback = bool(config.get("llm_prefer_fallback"))
+        should_use_fallback = prefer_fallback
+
+        if not should_use_fallback and str(config.get("llm_provider", "")).lower() == "ollama":
+            installed = list_ollama_models()
+            if installed:
+                should_use_fallback = (
+                    config.get("deep_think_llm") not in installed
+                    or config.get("quick_think_llm") not in installed
+                )
+
+        if not should_use_fallback:
+            return config
+
+        resolved = config.copy()
+        resolved["llm_provider"] = fallback_provider
+        resolved["deep_think_llm"] = config.get("fallback_deep_think_llm") or config.get("deep_think_llm")
+        resolved["quick_think_llm"] = config.get("fallback_quick_think_llm") or config.get("quick_think_llm")
+        logger.info(
+            "Using fallback LLM provider=%s quick=%s deep=%s",
+            resolved["llm_provider"],
+            resolved["quick_think_llm"],
+            resolved["deep_think_llm"],
+        )
+        return resolved
 
     def _get_provider_kwargs(self) -> Dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -196,6 +230,12 @@ class TradingAgentsGraph:
         (None, None, None) if price data is unavailable (too recent, delisted,
         or network error).
         """
+        if is_tradingview_symbol(ticker):
+            logger.info(
+                "Skipping yfinance return lookup for TradingView symbol %s",
+                ticker,
+            )
+            return None, None, None
         try:
             start = datetime.strptime(trade_date, "%Y-%m-%d")
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
@@ -261,13 +301,17 @@ class TradingAgentsGraph:
         if updates:
             self.memory_log.batch_update_with_outcomes(updates)
 
-    def propagate(self, company_name, trade_date):
+    def propagate(self, company_name, trade_date, node_callback=None):
         """Run the trading agents graph for a company on a specific date.
 
         When ``checkpoint_enabled`` is set in config, the graph is recompiled
         with a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
+
+        When ``node_callback`` is provided it is invoked for every LangGraph
+        stream chunk so callers can render live per-component progress.
         """
+        self._node_callback = node_callback
         self.ticker = company_name
 
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
@@ -313,17 +357,42 @@ class TradingAgentsGraph:
             tid = thread_id(company_name, str(trade_date))
             args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
 
-        if self.debug:
-            trace = []
-            for chunk in self.graph.stream(init_agent_state, **args):
-                if len(chunk["messages"]) == 0:
-                    pass
-                else:
-                    chunk["messages"][-1].pretty_print()
-                    trace.append(chunk)
-            final_state = trace[-1]
+        callback = getattr(self, "_node_callback", None)
+        if self.debug or callback is not None:
+            # propagator.get_graph_args() includes stream_mode="values" for the
+            # plain invoke path. We want "updates" here (one event per node so
+            # the live-progress tracker can mark components as they finish), so
+            # strip the conflicting key before unpacking — without this we get
+            # `TypeError: stream() got multiple values for keyword argument
+            # 'stream_mode'` from LangGraph.
+            stream_args = {k: v for k, v in args.items() if k != "stream_mode"}
+            final_state = None
+            accumulated: dict = {}
+            for chunk in self.graph.stream(init_agent_state, stream_mode="updates", **stream_args):
+                if callback is not None:
+                    try:
+                        callback(chunk)
+                    except Exception:
+                        logger.exception("node_callback raised; continuing graph stream")
+                if isinstance(chunk, dict):
+                    for _node, delta in chunk.items():
+                        if isinstance(delta, dict):
+                            accumulated.update(delta)
+                if self.debug and isinstance(chunk, dict):
+                    for _node, delta in chunk.items():
+                        if isinstance(delta, dict) and delta.get("messages"):
+                            try:
+                                delta["messages"][-1].pretty_print()
+                            except Exception:
+                                pass
+            # Reconstruct the final state from streamed deltas merged onto init.
+            final_state = {**init_agent_state, **accumulated}
         else:
-            final_state = self.graph.invoke(init_agent_state, **args)
+            # invoke() doesn't accept stream_mode either — strip it before
+            # spreading so a future propagator tweak can't bring back the
+            # same TypeError on this branch.
+            invoke_args = {k: v for k, v in args.items() if k != "stream_mode"}
+            final_state = self.graph.invoke(init_agent_state, **invoke_args)
 
         # Store current state for reflection.
         self.curr_state = final_state

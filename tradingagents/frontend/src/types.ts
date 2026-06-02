@@ -2,6 +2,7 @@
 
 export interface AccountStatus {
   trading_mode: string
+  server?: string | null
   account_balance: number
   account_equity: number
   available_margin: number
@@ -26,6 +27,7 @@ export interface Position {
   unrealized_pnl_percent: number
   entry_time: string
   duration_seconds: number
+  comment?: string | null
 }
 
 export interface Trade {
@@ -41,6 +43,7 @@ export interface Trade {
   pnl_percent: number | null
   duration_seconds: number | null
   reason: string | null
+  comment?: string | null
 }
 
 export interface DashboardStatus {
@@ -63,8 +66,9 @@ export interface TradeEvent {
 export interface WatchlistEntry {
   symbol: string
   display_name: string
-  mode: 'forex' | 'commodity' | 'stock'
+  mode: 'forex' | 'commodity' | 'crypto' | 'index' | 'stock'
   interval_hours: number
+  interval_minutes?: number
   analysts: string[]
   use_tradingview: boolean
   enabled: boolean
@@ -72,6 +76,7 @@ export interface WatchlistEntry {
   last_decision: string | null
   last_signal: string | null   // "BUY" | "SELL" | "HOLD" | null
   latest_result?: AnalysisResult
+  analysis_job?: AnalysisJob
 }
 
 export interface AnalysisResult {
@@ -80,6 +85,13 @@ export interface AnalysisResult {
   signal: string
   decision_text: string
   error: string | null
+  execution?: {
+    status?: string
+    reason?: string
+    ticket?: number
+    execution_price?: number
+    comment?: string
+  } | null
   timestamp: string
 }
 
@@ -87,6 +99,76 @@ export interface AnalysisEvent {
   type: string
   data: AnalysisResult
   timestamp: string
+}
+
+export interface AnalysisJob {
+  job_id: string
+  symbol: string
+  execute_trade: boolean
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'timeout'
+  message: string
+  progress_percent: number
+  started_at: string
+  updated_at: string
+  completed_at: string | null
+  timeout_seconds: number
+  result?: AnalysisResult | null
+  error?: string | null
+}
+
+export interface TriggerAnalysisResponse {
+  triggered: boolean
+  symbol: string
+  execute_trade: boolean
+  job_id: string
+  job: AnalysisJob
+  message: string
+}
+
+export interface AnalysisTrace {
+  symbol: string
+  signal: string
+  success: boolean
+  timestamp: string
+  components: {
+    market_analyst: string
+    sentiment_analyst: string
+    news_analyst: string
+    fundamentals_analyst: string
+    bull_researcher: string
+    bear_researcher: string
+    research_manager: string
+    trader: string
+    aggressive_risk: string
+    neutral_risk: string
+    conservative_risk: string
+    portfolio_manager: string
+  }
+  debates: {
+    research: string
+    risk: string
+  }
+  execution?: AnalysisResult['execution'] | null
+}
+
+export interface AnalysisFlow {
+  id: number
+  symbol: string
+  signal: string
+  decision_text: string | null
+  success: boolean
+  error: string | null
+  params_snapshot: Record<string, unknown> | null
+  horizon_hours: number
+  decided_at: string
+  trace: AnalysisTrace
+  trace_created_at?: string | null
+  trace_note?: string
+  entry_price?: number | null
+  exit_price?: number | null
+  pnl_pct?: number | null
+  evaluated_at?: string | null
+  outcome_error?: string | null
 }
 
 // ─── Learning loop ─────────────────────────────────────────────────────────
@@ -148,3 +230,89 @@ export interface Proposal {
 
 export type LearnedParams = Record<string, unknown>
 export type Goals = Record<string, unknown>
+
+export interface AppSettings {
+  llm_provider: string
+  deep_think_llm: string
+  quick_think_llm: string
+  llm_fallback_enabled: boolean
+  llm_prefer_fallback: boolean
+  fallback_llm_provider: string
+  fallback_deep_think_llm: string
+  fallback_quick_think_llm: string
+  watchlist_enabled: boolean
+  watchlist_check_interval_seconds: number
+  analysis_timeout_seconds: number
+  auto_trade_enabled: boolean
+  auto_trade_paper_only: boolean
+  trade_comment: string
+  max_risk_per_trade_percent: number
+  max_risk_per_trade_usd: number | null
+}
+
+export interface SettingsResponse {
+  settings: AppSettings
+  ollama_models: string[]
+  settings_path: string
+}
+
+/** Single entry from /api/symbols — the broker's symbol catalog. */
+export interface BrokerSymbol {
+  name: string
+  description: string
+  path: string
+  category: string
+  currency_base: string
+  currency_profit: string
+  digits: number
+  visible: boolean
+}
+
+export interface BrokerSymbolsResponse {
+  count: number
+  categories: Record<string, number>
+  symbols: BrokerSymbol[]
+}
+
+export type FlowComponentKey =
+  | 'market_analyst'
+  | 'sentiment_analyst'
+  | 'news_analyst'
+  | 'fundamentals_analyst'
+  | 'bull_researcher'
+  | 'bear_researcher'
+  | 'research_manager'
+  | 'trader'
+  | 'aggressive_risk'
+  | 'neutral_risk'
+  | 'conservative_risk'
+  | 'portfolio_manager'
+
+export type FlowComponentStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+
+export interface FlowComponentState {
+  status: FlowComponentStatus
+  /** Short text shown in the architecture node card (≤160 chars). */
+  preview: string
+  /** Full untruncated output text, rendered in the detail panel. */
+  full_text?: string
+  updated_at: number
+  /** Epoch seconds — when this component first transitioned to running. */
+  started_at?: number | null
+  /** Epoch seconds — when this component transitioned to done/error. */
+  completed_at?: number | null
+}
+
+export interface ActiveAnalysisRun {
+  run_id: string
+  symbol: string
+  started_at: number
+  finished_at: number | null
+  status: 'running' | 'success' | 'error' | 'timeout'
+  stage_label: string
+  active_component: FlowComponentKey | null
+  error: string | null
+  signal: string | null
+  elapsed_seconds: number
+  components: Record<FlowComponentKey, FlowComponentState>
+}

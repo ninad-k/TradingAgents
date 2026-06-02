@@ -83,6 +83,15 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             ON decisions(symbol, decided_at);
         CREATE INDEX IF NOT EXISTS idx_decisions_decided_at
             ON decisions(decided_at);
+        CREATE TABLE IF NOT EXISTS analysis_traces (
+            decision_id INTEGER PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            trace TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (decision_id) REFERENCES decisions(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_analysis_traces_symbol
+            ON analysis_traces(symbol, created_at);
         CREATE TABLE IF NOT EXISTS decision_outcomes (
             decision_id INTEGER PRIMARY KEY,
             entry_price REAL,
@@ -381,6 +390,85 @@ def recent_decisions_with_outcomes(
         d["outcome_error"] = row["outcome_error"]
         out.append(d)
     return out
+
+
+def save_analysis_trace(
+    decision_id: int,
+    symbol: str,
+    trace: dict[str, Any],
+    created_at: Optional[datetime] = None,
+) -> None:
+    """Persist a component-level analysis trace for one decision row."""
+    with _conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO analysis_traces "
+            "(decision_id, symbol, trace, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                int(decision_id),
+                symbol.upper(),
+                json.dumps(trace),
+                (created_at or datetime.now()).isoformat(),
+            ),
+        )
+
+
+def get_analysis_trace(decision_id: int) -> Optional[dict[str, Any]]:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM analysis_traces WHERE decision_id = ?",
+            (int(decision_id),),
+        ).fetchone()
+    return _row_to_trace_dict(row) if row else None
+
+
+def recent_analysis_flows(limit: int = 50, symbol: Optional[str] = None) -> list[dict[str, Any]]:
+    """Return recent decisions joined with their saved component traces."""
+    sql = (
+        "SELECT d.*, t.trace, t.created_at AS trace_created_at, "
+        "       o.entry_price, o.exit_price, o.pnl_pct, "
+        "       o.evaluated_at, o.error AS outcome_error "
+        "FROM decisions d "
+        "LEFT JOIN analysis_traces t ON t.decision_id = d.id "
+        "LEFT JOIN decision_outcomes o ON o.decision_id = d.id "
+    )
+    params: tuple[Any, ...] = ()
+    if symbol:
+        sql += "WHERE d.symbol = ? "
+        params = (symbol.upper(),)
+    sql += "ORDER BY d.decided_at DESC LIMIT ?"
+    params = params + (int(limit),)
+    with _conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_row_to_flow_dict(row) for row in rows]
+
+
+def _row_to_trace_dict(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        trace = json.loads(row["trace"]) if row["trace"] else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        trace = {}
+    return {
+        "decision_id": int(row["decision_id"]),
+        "symbol": row["symbol"],
+        "trace": trace,
+        "created_at": row["created_at"],
+    }
+
+
+def _row_to_flow_dict(row: sqlite3.Row) -> dict[str, Any]:
+    flow = _row_to_decision_dict(row)
+    try:
+        flow["trace"] = json.loads(row["trace"]) if row["trace"] else None
+    except (TypeError, ValueError, json.JSONDecodeError):
+        flow["trace"] = None
+    flow["trace_created_at"] = row["trace_created_at"]
+    flow["entry_price"] = row["entry_price"]
+    flow["exit_price"] = row["exit_price"]
+    flow["pnl_pct"] = row["pnl_pct"]
+    flow["evaluated_at"] = row["evaluated_at"]
+    flow["outcome_error"] = row["outcome_error"]
+    return flow
 
 
 def _row_to_decision_dict(row: sqlite3.Row) -> dict[str, Any]:
