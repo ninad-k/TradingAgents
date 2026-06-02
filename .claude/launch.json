@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--host", "127.0.0.1", "--port", "5174", "--clearScreen", "false"],
+      "cwd": "tradingagents/frontend",
+      "port": 5174
+    }
+  ]
+}

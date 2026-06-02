@@ -6,7 +6,7 @@ import type {
   FlowComponentState,
   FlowComponentStatus,
 } from '../types'
-import { getAnalysisFlows, getActiveAnalysisRuns } from '../api'
+import { getAnalysisFlows, getActiveAnalysisRuns, clearStuckRuns } from '../api'
 
 type SourceLane = {
   key: 'market' | 'social' | 'news' | 'fundamentals'
@@ -589,6 +589,18 @@ export function AnalysisFlowPanel() {
             aria-label="Filter symbol"
           />
           <button className="btn btn-ghost" onClick={() => setSymbolFilter('')}>Clear</button>
+          <button className="btn btn-warning" onClick={async () => {
+            try {
+              const result = await clearStuckRuns()
+              if (result.cleared > 0) {
+                alert(`Cleared ${result.cleared} stuck run(s)`)
+              }
+            } catch (err) {
+              alert(`Error clearing runs: ${err}`)
+            }
+          }}>
+            Clear Stuck Runs
+          </button>
         </div>
       </div>
 

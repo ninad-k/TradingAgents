@@ -455,13 +455,29 @@ async def get_active_analysis_runs() -> List[Dict]:
     return live_progress.get_active()
 
 
+@app.post("/api/analysis/clear-stuck")
+async def clear_stuck_runs() -> Dict[str, int]:
+    """Immediately force the watchdog to scan for and cancel stalled runs.
+
+    Returns count of runs that were cancelled.
+    """
+    from tradingagents.monitor.live_progress import live_progress
+    cleared = live_progress.clear_all_stalled()
+    return {"cleared": cleared}
+
+
 @app.get("/api/analysis-flow")
 async def get_analysis_flow(limit: int = 50, symbol: Optional[str] = None) -> List[Dict]:
-    """Return recent decision flows with component-level traces when available."""
+    """Return recent decision flows with component-level traces when available.
+
+    Filters out failed/timed-out analyses (success=false or has error).
+    """
     from tradingagents.monitor import store
 
-    flows = store.recent_analysis_flows(limit=limit, symbol=symbol)
-    for flow in flows:
+    flows = store.recent_analysis_flows(limit=limit * 2, symbol=symbol)  # Fetch extra to account for filtering
+    successful_flows = [f for f in flows if f.get("success") and not f.get("error")][:limit]
+
+    for flow in successful_flows:
         if flow.get("trace"):
             continue
         decision_text = flow.get("decision_text") or ""
@@ -491,7 +507,7 @@ async def get_analysis_flow(limit: int = 50, symbol: Optional[str] = None) -> Li
             "execution": None,
         }
         flow["trace_note"] = "Detailed component trace was not captured for this older decision."
-    return flows
+    return successful_flows
 
 
 @app.get("/api/analysis-flow/{decision_id}")

@@ -325,6 +325,16 @@ class LiveProgressTracker:
             logger.warning("Watchdog cancelling stalled run %s — %s", rid, stage)
             self.finish_run(rid, "error", error=stage)
 
+    def clear_all_stalled(self) -> int:
+        """Immediately cancel all running analyses that haven't updated recently.
+
+        Used by the dashboard Clear button to force cleanup of stuck runs.
+        Returns count of runs that were cancelled.
+        """
+        self._sweep_stalled()
+        with self._lock:
+            return sum(1 for r in self._runs.values() if r.status == "error")
+
     # --- read -------------------------------------------------------------
 
     def get_active(self) -> List[Dict]:

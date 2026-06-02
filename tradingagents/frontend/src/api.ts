@@ -113,6 +113,11 @@ export async function getAnalysisFlows(opts: {
   return parseResponse<AnalysisFlow[]>(response, 'analysis flow')
 }
 
+export async function clearStuckRuns(): Promise<{ cleared: number }> {
+  const response = await fetch(`${API_BASE}/api/analysis/clear-stuck`, { method: 'POST' })
+  return parseResponse<{ cleared: number }>(response, 'clear stuck runs')
+}
+
 export async function addToWatchlist(symbol: string, intervalMinutes: number = 1): Promise<any> {
   const response = await fetch(`${API_BASE}/api/watchlist/${symbol}?interval_minutes=${intervalMinutes}`, { method: 'POST' })
   return parseResponse<any>(response, 'add watchlist symbol')
