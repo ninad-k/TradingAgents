@@ -56,21 +56,17 @@ class OrderGenerator:
             max_risk_percent: Max % of account to risk per trade (default 2%)
             max_risk_usd: Max USD to risk per trade (optional, overrides percent)
             trade_comment: Comment string attached to the MT5 order
-            fixed_lot_size: If > 0, every BUY/SELL is sized at this many lots and
-                the risk-based sizing math is bypassed entirely. Useful while
-                per-symbol risk parameters are still being tuned. Falls back to
-                the TRADINGAGENTS_FIXED_LOT_SIZE env var when not supplied.
+            fixed_lot_size: If explicitly set > 0, every BUY/SELL is sized at this
+                many lots and the risk-based sizing math is bypassed entirely.
+                Useful while per-symbol risk parameters are still being tuned.
+                This is an explicit, per-instance opt-in only: it is intentionally
+                NOT read from an ambient env var, because a globally-set override
+                would silently defeat instrument-specific risk sizing (and the
+                missing-pip-value guard) for every OrderGenerator in the process.
         """
         self.max_risk_percent = max_risk_percent
         self.max_risk_usd = max_risk_usd
         self.trade_comment = trade_comment or os.getenv("TRADINGAGENTS_TRADE_COMMENT", "TradingAgent2.0")
-        if fixed_lot_size is None:
-            env_lot = os.getenv("TRADINGAGENTS_FIXED_LOT_SIZE", "").strip()
-            try:
-                fixed_lot_size = float(env_lot) if env_lot else None
-            except ValueError:
-                logger.warning("Invalid TRADINGAGENTS_FIXED_LOT_SIZE=%r — ignoring", env_lot)
-                fixed_lot_size = None
         self.fixed_lot_size = fixed_lot_size if (fixed_lot_size and fixed_lot_size > 0) else None
         if self.fixed_lot_size:
             logger.info("OrderGenerator: fixed lot override = %.3f lots/trade", self.fixed_lot_size)
