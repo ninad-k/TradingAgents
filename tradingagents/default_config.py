@@ -21,6 +21,13 @@ DEFAULT_CONFIG = {
     "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),
     "deep_think_llm": os.getenv("DEEP_THINK_LLM", "gemma4:latest"),
     "quick_think_llm": os.getenv("QUICK_THINK_LLM", "gemma4:latest"),
+    # Optional per-tier provider override for a hybrid setup, e.g. local Ollama
+    # for the high-volume quick agents and Hugging Face (or any provider) for
+    # the deep/reasoning agents. When unset, both tiers use `llm_provider`.
+    # Example hybrid: LLM_PROVIDER=ollama, DEEP_THINK_PROVIDER=huggingface,
+    #   DEEP_THINK_LLM=deepseek-ai/DeepSeek-V3-0324 (needs HF_TOKEN).
+    "deep_think_provider": os.getenv("DEEP_THINK_PROVIDER") or None,
+    "quick_think_provider": os.getenv("QUICK_THINK_PROVIDER") or None,
     "llm_fallback_enabled": os.getenv("LLM_FALLBACK_ENABLED", "true").lower() == "true",
     "llm_prefer_fallback": os.getenv("LLM_PREFER_FALLBACK", "true").lower() == "true",
     "fallback_llm_provider": os.getenv("FALLBACK_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "ollama")),

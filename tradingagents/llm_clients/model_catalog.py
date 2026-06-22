@@ -99,6 +99,27 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Custom model ID", "custom"),
         ],
     },
+    # Hugging Face Inference Providers (OpenAI-compatible router). Model IDs are
+    # HF repo names; the validator accepts any, so custom IDs work too. These
+    # picks all support tool calling + structured output (required by the agent
+    # graph). Availability on the serverless router can change — verify on
+    # https://huggingface.co/<id> if a request 404s, and swap as needed.
+    "huggingface": {
+        "quick": [
+            ("Qwen3 30B A3B - Fast MoE, strong tool use", "Qwen/Qwen3-30B-A3B"),
+            ("GPT-OSS 20B - Open reasoning, cheap", "openai/gpt-oss-20b"),
+            ("Llama 3.3 70B Instruct - Reliable tool calling", "meta-llama/Llama-3.3-70B-Instruct"),
+            ("Qwen 2.5 72B Instruct - Broad capability", "Qwen/Qwen2.5-72B-Instruct"),
+            ("Custom model ID", "custom"),
+        ],
+        "deep": [
+            ("DeepSeek V3 (0324) - Top open reasoning", "deepseek-ai/DeepSeek-V3-0324"),
+            ("Qwen3 235B A22B - Large MoE, deep reasoning", "Qwen/Qwen3-235B-A22B"),
+            ("GPT-OSS 120B - Open frontier reasoning", "openai/gpt-oss-120b"),
+            ("Llama 3.3 70B Instruct - Reliable tool calling", "meta-llama/Llama-3.3-70B-Instruct"),
+            ("Custom model ID", "custom"),
+        ],
+    },
     # OpenRouter: fetched dynamically. Azure: any deployed model name.
     "ollama": {
         "quick": [

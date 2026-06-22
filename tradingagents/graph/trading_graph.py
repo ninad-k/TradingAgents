@@ -77,24 +77,30 @@ class TradingAgentsGraph:
         os.makedirs(self.config["data_cache_dir"], exist_ok=True)
         os.makedirs(self.config["results_dir"], exist_ok=True)
 
-        # Initialize LLMs with provider-specific thinking configuration
-        llm_kwargs = self._get_provider_kwargs()
+        # Per-tier provider: deep and quick agents may run on different
+        # providers (e.g. local Ollama for quick, Hugging Face for deep).
+        # Each falls back to the single `llm_provider` when not overridden.
+        deep_provider = self.config.get("deep_think_provider") or self.config["llm_provider"]
+        quick_provider = self.config.get("quick_think_provider") or self.config["llm_provider"]
 
-        # Add callbacks to kwargs if provided (passed to LLM constructor)
+        # Callbacks (e.g. for tracking LLM/tool stats) go to every client.
+        common_kwargs = {}
         if self.callbacks:
-            llm_kwargs["callbacks"] = self.callbacks
+            common_kwargs["callbacks"] = self.callbacks
 
         deep_client = create_llm_client(
-            provider=self.config["llm_provider"],
+            provider=deep_provider,
             model=self.config["deep_think_llm"],
             base_url=self.config.get("backend_url"),
-            **llm_kwargs,
+            **self._get_provider_kwargs(deep_provider),
+            **common_kwargs,
         )
         quick_client = create_llm_client(
-            provider=self.config["llm_provider"],
+            provider=quick_provider,
             model=self.config["quick_think_llm"],
             base_url=self.config.get("backend_url"),
-            **llm_kwargs,
+            **self._get_provider_kwargs(quick_provider),
+            **common_kwargs,
         )
 
         self.deep_thinking_llm = deep_client.get_llm()
@@ -140,19 +146,34 @@ class TradingAgentsGraph:
         prefer_fallback = bool(config.get("llm_prefer_fallback"))
         should_use_fallback = prefer_fallback
 
-        if not should_use_fallback and str(config.get("llm_provider", "")).lower() == "ollama":
-            installed = list_ollama_models()
-            if installed:
-                should_use_fallback = (
-                    config.get("deep_think_llm") not in installed
-                    or config.get("quick_think_llm") not in installed
-                )
+        # Effective provider per tier (honours the hybrid per-tier overrides).
+        def _tier_provider(tier: str) -> str:
+            return str(
+                config.get(f"{tier}_think_provider") or config.get("llm_provider", "")
+            ).lower()
+
+        # Auto-fallback only for tiers actually pointed at local Ollama whose
+        # requested model isn't installed. A tier on a remote provider (e.g.
+        # huggingface) is never gated on the local model list.
+        if not should_use_fallback:
+            installed = None
+            for tier, model_key in (("quick", "quick_think_llm"), ("deep", "deep_think_llm")):
+                if _tier_provider(tier) != "ollama":
+                    continue
+                if installed is None:
+                    installed = list_ollama_models()
+                if installed and config.get(model_key) not in installed:
+                    should_use_fallback = True
+                    break
 
         if not should_use_fallback:
             return config
 
         resolved = config.copy()
         resolved["llm_provider"] = fallback_provider
+        # Falling back to a single provider supersedes any per-tier hybrid split.
+        resolved["deep_think_provider"] = None
+        resolved["quick_think_provider"] = None
         resolved["deep_think_llm"] = config.get("fallback_deep_think_llm") or config.get("deep_think_llm")
         resolved["quick_think_llm"] = config.get("fallback_quick_think_llm") or config.get("quick_think_llm")
         logger.info(
@@ -163,10 +184,14 @@ class TradingAgentsGraph:
         )
         return resolved
 
-    def _get_provider_kwargs(self) -> Dict[str, Any]:
-        """Get provider-specific kwargs for LLM client creation."""
+    def _get_provider_kwargs(self, provider: Optional[str] = None) -> Dict[str, Any]:
+        """Get provider-specific kwargs for LLM client creation.
+
+        Accepts an explicit provider so deep/quick tiers on different providers
+        each get their own thinking config; defaults to the global llm_provider.
+        """
         kwargs = {}
-        provider = self.config.get("llm_provider", "").lower()
+        provider = (provider or self.config.get("llm_provider", "")).lower()
 
         if provider == "google":
             thinking_level = self.config.get("google_thinking_level")

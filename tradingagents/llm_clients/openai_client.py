@@ -48,6 +48,11 @@ _PROVIDER_CONFIG = {
     "glm": ("https://api.z.ai/api/paas/v4/", "ZHIPU_API_KEY"),
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "ollama": ("http://localhost:11434/v1", None),
+    # Hugging Face Inference Providers — OpenAI-compatible router that fans
+    # out to 15+ serverless partners. Model IDs are HF repo names (e.g.
+    # "deepseek-ai/DeepSeek-V3-0324"); an optional ":provider" suffix pins a
+    # specific backend, otherwise the fastest available is auto-selected.
+    "huggingface": ("https://router.huggingface.co/v1", "HF_TOKEN"),
 }
 
 
