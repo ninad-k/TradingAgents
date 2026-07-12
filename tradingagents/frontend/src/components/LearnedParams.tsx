@@ -74,6 +74,67 @@ export function LearnedParamsPanel() {
 
   return (
     <div style={{ display: 'grid', gap: 20 }}>
+
+      {/* ── Mock Mode Banner ─────────────────────────────────────────── */}
+      {settings && false && <div style={{
+        padding: '16px 20px',
+        borderRadius: 'var(--radius)',
+        border: `2px solid ${settings?.mock_mode_enabled ? 'var(--color-warning)' : 'var(--color-border)'}`,
+        background: settings?.mock_mode_enabled
+          ? 'color-mix(in srgb, var(--color-warning) 10%, var(--color-surface))'
+          : 'var(--color-surface)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 20,
+        flexWrap: 'wrap',
+      }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{
+            fontWeight: 700,
+            fontSize: '1rem',
+            color: settings?.mock_mode_enabled ? 'var(--color-warning)' : 'var(--color-text)',
+            marginBottom: 4,
+          }}>
+            {settings?.mock_mode_enabled ? '⚡ Mock Mode ON' : 'Mock Mode OFF'}
+          </div>
+          <div style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)', lineHeight: 1.5 }}>
+            {settings?.mock_mode_enabled
+              ? 'Scheduled analyses skip the LLM pipeline — a random BUY or SELL is picked and sent directly to MT5. Scoreboard, Decisions, and executions all update normally.'
+              : 'Real mode: scheduled analyses run the full LLM pipeline before placing any trade.'}
+          </div>
+        </div>
+        <label style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          cursor: 'pointer',
+          userSelect: 'none',
+          fontSize: '0.9rem',
+          fontWeight: 600,
+          color: settings?.mock_mode_enabled ? 'var(--color-warning)' : 'var(--color-text-muted)',
+        }}>
+          <input
+            type="checkbox"
+            checked={settings!.mock_mode_enabled}
+            onChange={e => patch('mock_mode_enabled', e.target.checked)}
+            style={{ width: 18, height: 18, cursor: 'pointer' }}
+          />
+          {settings!.mock_mode_enabled ? 'Enabled' : 'Disabled'}
+        </label>
+        <button
+          onClick={save}
+          disabled={saving}
+          className="btn"
+          style={{
+            background: settings!.mock_mode_enabled ? 'var(--color-warning)' : undefined,
+            color: settings!.mock_mode_enabled ? '#000' : undefined,
+          }}
+        >
+          {saving ? 'Saving…' : 'Apply'}
+        </button>
+      </div>}
+      {/* ─────────────────────────────────────────────────────────────── */}
+
       <div className="card">
         <div style={{
           display: 'flex',
@@ -146,6 +207,11 @@ export function LearnedParamsPanel() {
             checked={settings.auto_trade_paper_only}
             onChange={v => patch('auto_trade_paper_only', v)}
           />
+          {settings && false && <CheckboxRow
+            label="Mock mode (skip LLM)"
+            checked={settings!.mock_mode_enabled}
+            onChange={v => patch('mock_mode_enabled', v)}
+          />}
           <Field label="Max Risk Per Trade %">
             <NumberInput
               value={settings.max_risk_per_trade_percent}

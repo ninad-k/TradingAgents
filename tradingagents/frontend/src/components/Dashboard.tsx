@@ -1,5 +1,6 @@
 import type { DashboardStatus, WatchlistEntry } from '../types'
 import { MetricsCards } from './MetricsCards'
+import { SonnetTokenPanel } from './SonnetTokenPanel'
 import { AccountOverview } from './AccountOverview'
 import { PortfolioSummary } from './PortfolioSummary'
 import { TradeHistory } from './TradeHistory'
@@ -17,6 +18,9 @@ export function Dashboard({ status, watchlistEntries, onWatchlistRefresh }: Dash
     <div>
       {/* Key Metrics Row */}
       <MetricsCards account={status.account} />
+
+      {/* Token counter + Stop Sonnet kill switch */}
+      <SonnetTokenPanel usage={status.token_usage} />
 
       {/* Watchlist — prominently at the top */}
       <div className="card" style={{ marginBottom: '24px' }}>
@@ -36,7 +40,7 @@ export function Dashboard({ status, watchlistEntries, onWatchlistRefresh }: Dash
 
       {/* Trade History */}
       <div className="card">
-        <TradeHistory trades={status.recent_trades} />
+        <TradeHistory />
       </div>
     </div>
   )

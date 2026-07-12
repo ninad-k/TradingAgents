@@ -53,6 +53,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             display_name TEXT,
             mode TEXT,
             interval_hours INTEGER,
+            interval_minutes INTEGER,
             analysts TEXT,
             use_tradingview INTEGER,
             enabled INTEGER DEFAULT 1,
@@ -77,7 +78,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             error TEXT,
             params_snapshot TEXT,
             horizon_hours INTEGER NOT NULL,
-            decided_at TEXT NOT NULL
+            decided_at TEXT NOT NULL,
+            confidence REAL
         );
         CREATE INDEX IF NOT EXISTS idx_decisions_symbol_ts
             ON decisions(symbol, decided_at);
@@ -114,6 +116,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         """
     )
     _migrate_proposal_lifecycle(conn)
+    _migrate_watchlist_interval_minutes(conn)
+    _migrate_decision_confidence(conn)
+
+
+def _migrate_decision_confidence(conn: sqlite3.Connection) -> None:
+    """Add the confidence column to older decisions tables. Backfills as NULL."""
+    try:
+        conn.execute("ALTER TABLE decisions ADD COLUMN confidence REAL")
+    except sqlite3.OperationalError:
+        # Column already exists.
+        pass
 
 
 def _migrate_proposal_lifecycle(conn: sqlite3.Connection) -> None:
@@ -131,6 +144,23 @@ def _migrate_proposal_lifecycle(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             # Column already exists.
             pass
+
+
+def _migrate_watchlist_interval_minutes(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("ALTER TABLE watchlist_entries ADD COLUMN interval_minutes INTEGER")
+    except sqlite3.OperationalError:
+        pass
+    conn.execute(
+        """
+        UPDATE watchlist_entries
+        SET interval_minutes = CASE
+            WHEN interval_hours IS NULL OR interval_hours <= 0 THEN 1
+            ELSE interval_hours * 60
+        END
+        WHERE interval_minutes IS NULL
+        """
+    )
 
 
 @contextmanager
@@ -168,14 +198,15 @@ def save_watchlist_entry(entry: Any) -> None:
     with _conn() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO watchlist_entries "
-            "(symbol, display_name, mode, interval_hours, analysts, use_tradingview, "
+            "(symbol, display_name, mode, interval_hours, interval_minutes, analysts, use_tradingview, "
             " enabled, last_analysis, last_decision, last_signal) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 entry.symbol.upper(),
                 entry.display_name,
                 entry.mode,
                 int(entry.interval_hours),
+                int(getattr(entry, "interval_minutes", 1 if entry.interval_hours <= 0 else entry.interval_hours * 60)),
                 json.dumps(entry.analysts),
                 1 if entry.use_tradingview else 0,
                 1 if entry.enabled else 0,
@@ -224,6 +255,7 @@ def _row_to_entry_dict(row: sqlite3.Row) -> dict[str, Any]:
         "display_name": row["display_name"],
         "mode": row["mode"],
         "interval_hours": int(row["interval_hours"]) if row["interval_hours"] is not None else 0,
+        "interval_minutes": int(row["interval_minutes"]) if row["interval_minutes"] is not None else 1,
         "analysts": analysts,
         "use_tradingview": bool(row["use_tradingview"]),
         "enabled": bool(row["enabled"]),
@@ -291,15 +323,20 @@ def record_decision(
     params_snapshot: Optional[dict[str, Any]] = None,
     error: Optional[str] = None,
     decided_at: Optional[datetime] = None,
+    confidence: Optional[float] = None,
 ) -> int:
-    """Append a decision to the ledger. Returns the new row id."""
+    """Append a decision to the ledger. Returns the new row id.
+
+    ``confidence`` is the decision's 0.0-1.0 conviction (if known); it feeds the
+    reviewer's IC/Rank-IC and confidence-bucket scoring.
+    """
     ts = (decided_at or datetime.now()).isoformat()
     with _conn() as conn:
         cur = conn.execute(
             "INSERT INTO decisions "
             "(symbol, signal, decision_text, success, error, params_snapshot, "
-            " horizon_hours, decided_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " horizon_hours, decided_at, confidence) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 symbol.upper(),
                 signal,
@@ -309,19 +346,28 @@ def record_decision(
                 json.dumps(params_snapshot) if params_snapshot is not None else None,
                 int(horizon_hours),
                 ts,
+                float(confidence) if confidence is not None else None,
             ),
         )
         return int(cur.lastrowid)
 
 
 def unevaluated_decisions(now: Optional[datetime] = None) -> list[dict[str, Any]]:
-    """Decisions whose horizon has elapsed but have no outcome row yet."""
+    """Decisions whose horizon has elapsed but exit_price is not yet filled.
+
+    Includes rows with no outcome at all (o.decision_id IS NULL) AND rows
+    that already have a partial outcome (entry_price set but exit_price NULL).
+    The existing entry_price is returned as 'existing_entry_price' so the
+    evaluator can reuse an execution price rather than overwriting it with a
+    price-feed lookup.
+    """
     now = now or datetime.now()
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT d.* FROM decisions d "
+            "SELECT d.*, o.entry_price AS existing_entry_price "
+            "FROM decisions d "
             "LEFT JOIN decision_outcomes o ON o.decision_id = d.id "
-            "WHERE o.decision_id IS NULL AND d.success = 1"
+            "WHERE (o.decision_id IS NULL OR o.exit_price IS NULL) AND d.success = 1"
         ).fetchall()
     pending = []
     for row in rows:
@@ -331,7 +377,9 @@ def unevaluated_decisions(now: Optional[datetime] = None) -> list[dict[str, Any]
         horizon_hours = int(row["horizon_hours"])
         if (now - decided).total_seconds() < horizon_hours * 3600:
             continue
-        pending.append(_row_to_decision_dict(row))
+        d = _row_to_decision_dict(row)
+        d["existing_entry_price"] = row["existing_entry_price"]
+        pending.append(d)
     return pending
 
 
@@ -476,6 +524,11 @@ def _row_to_decision_dict(row: sqlite3.Row) -> dict[str, Any]:
         params = json.loads(row["params_snapshot"]) if row["params_snapshot"] else None
     except (TypeError, ValueError, json.JSONDecodeError):
         params = None
+    # confidence may be absent on rows from pre-migration schemas / partial selects.
+    try:
+        confidence = row["confidence"]
+    except (IndexError, KeyError):
+        confidence = None
     return {
         "id": int(row["id"]),
         "symbol": row["symbol"],
@@ -486,6 +539,7 @@ def _row_to_decision_dict(row: sqlite3.Row) -> dict[str, Any]:
         "params_snapshot": params,
         "horizon_hours": int(row["horizon_hours"]),
         "decided_at": row["decided_at"],
+        "confidence": confidence,
     }
 
 

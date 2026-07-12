@@ -69,6 +69,16 @@ class AccountStatus(BaseModel):
     avg_trade_duration: int
 
 
+class TokenUsage(BaseModel):
+    """LLM token usage + kill-switch state for the dashboard."""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    total: int = 0
+    llm_calls: int = 0
+    budget_max: int = 0          # 0 = unlimited
+    llm_enabled: bool = True     # "Stop Sonnet" state
+
+
 class DashboardStatus(BaseModel):
     """Overall dashboard status."""
     timestamp: datetime
@@ -78,6 +88,7 @@ class DashboardStatus(BaseModel):
     recent_trades: List[Trade]
     total_positions: int
     total_closed_trades: int
+    token_usage: Optional[TokenUsage] = None
 
 
 class TradeEvent(BaseModel):

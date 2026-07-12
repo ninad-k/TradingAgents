@@ -6,7 +6,7 @@ import type {
   FlowComponentState,
   FlowComponentStatus,
 } from '../types'
-import { getAnalysisFlows, getActiveAnalysisRuns, clearStuckRuns } from '../api'
+import { getAnalysisFlows, getActiveAnalysisRuns, clearStuckRuns, downloadFlowReport } from '../api'
 
 type SourceLane = {
   key: 'market' | 'social' | 'news' | 'fundamentals'
@@ -485,6 +485,67 @@ function ComponentDetailPanel({
 }
 
 
+// ─── Completed-run debates + execution + report download ────────────────────
+
+function FlowReportSection({ flow }: { flow: AnalysisFlow }) {
+  const [downloading, setDownloading] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const research = (flow.trace?.debates?.research || '').trim()
+  const risk = (flow.trace?.debates?.risk || '').trim()
+  const execution = flow.trace?.execution
+
+  async function download() {
+    setDownloading(true)
+    setErr(null)
+    try {
+      await downloadFlowReport(flow.id, flow.symbol)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'download failed')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <section className="arch-detail" style={{ marginTop: 16 }}>
+      <div className="arch-detail-header">
+        <h3>Full Flow Report</h3>
+        <button
+          className="btn btn-trade"
+          onClick={download}
+          disabled={downloading}
+          style={{ padding: '6px 14px' }}
+          title="Download the management-ready Markdown report for this analysis"
+        >
+          {downloading ? 'Preparing…' : '⭳ Download Report'}
+        </button>
+      </div>
+      {err && <div className="alert-banner" style={{ margin: '8px 0' }}>{err}</div>}
+
+      <div className="arch-detail-output">
+        <div className="arch-detail-label">Research Debate (Bull vs Bear)</div>
+        {research
+          ? <pre className="arch-detail-pre">{research}</pre>
+          : <p style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>No research debate captured.</p>}
+      </div>
+
+      <div className="arch-detail-output">
+        <div className="arch-detail-label">Risk Debate</div>
+        {risk
+          ? <pre className="arch-detail-pre">{risk}</pre>
+          : <p style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>No risk debate captured.</p>}
+      </div>
+
+      <div className="arch-detail-output">
+        <div className="arch-detail-label">Execution</div>
+        {execution
+          ? <pre className="arch-detail-pre">{JSON.stringify(execution, null, 2)}</pre>
+          : <p style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>No trade executed for this decision.</p>}
+      </div>
+    </section>
+  )
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export function AnalysisFlowPanel() {
@@ -572,6 +633,13 @@ export function AnalysisFlowPanel() {
   const detailState = selectedRun?.components[selectedKey]
   const detailStatus: FlowComponentStatus = detailState?.status || 'pending'
   const detailFullText = (detailState?.full_text || detailState?.preview || '').trim()
+
+  // Historical runs (run_id "flow-<id>") carry the full trace — debate
+  // transcripts, execution, and a decision id we can render a report from.
+  const selectedFlow = useMemo(() => {
+    if (!selectedRun) return null
+    return flows.find(f => `flow-${f.id}` === selectedRun.run_id) ?? null
+  }, [flows, selectedRun])
 
   return (
     <div className="analysis-flow-page arch-page">
@@ -672,6 +740,8 @@ export function AnalysisFlowPanel() {
                 completedAt={detailState?.completed_at}
                 runError={selectedRun.error}
               />
+
+              {selectedFlow && <FlowReportSection flow={selectedFlow} />}
             </>
           ) : (
             <div className="flow-empty large">Trigger an analysis to populate the flow.</div>

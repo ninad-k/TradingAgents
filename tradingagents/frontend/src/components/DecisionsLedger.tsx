@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import type { DecisionRow } from '../types'
-import { getDecisions } from '../api'
+import { getDecisions, evaluateNow } from '../api'
 
 const fmtTs = (v?: string | null) => {
   if (!v) return '—'
@@ -15,13 +15,31 @@ export function DecisionsLedger() {
   const [symbolFilter, setSymbolFilter] = useState('')
   const [limit, setLimit] = useState(50)
   const [error, setError] = useState<string | null>(null)
+  const [evaluating, setEvaluating] = useState(false)
+  const [evalResult, setEvalResult] = useState<string | null>(null)
 
-  useEffect(() => {
+  const loadRows = useCallback(() => {
     setError(null)
     getDecisions({ symbol: symbolFilter || undefined, limit })
       .then(setRows)
       .catch((e) => setError(String(e)))
   }, [symbolFilter, limit])
+
+  useEffect(() => { loadRows() }, [loadRows])
+
+  async function handleEvaluateNow() {
+    setEvaluating(true)
+    setEvalResult(null)
+    try {
+      const res = await evaluateNow()
+      setEvalResult(`Evaluated ${res.evaluated} decision${res.evaluated === 1 ? '' : 's'} using current price`)
+      loadRows()
+    } catch (e) {
+      setEvalResult(`Error: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setEvaluating(false)
+    }
+  }
 
   if (error) return (
     <div className="card alert-banner" style={{ margin: 0 }}>
@@ -35,9 +53,11 @@ export function DecisionsLedger() {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 10,
       }}>
         <span>Decisions ({rows.length})</span>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             placeholder="filter symbol"
             value={symbolFilter}
@@ -50,8 +70,34 @@ export function DecisionsLedger() {
             <option value={100}>100</option>
             <option value={200}>200</option>
           </select>
+          <button
+            onClick={handleEvaluateNow}
+            disabled={evaluating}
+            className="btn"
+            title="Force-evaluate all pending decisions using current market price as the exit price"
+            style={{ fontSize: '0.78rem', padding: '5px 12px' }}
+          >
+            {evaluating ? 'Evaluating…' : '⚡ Evaluate Now'}
+          </button>
         </div>
       </div>
+      {evalResult && (
+        <div style={{
+          fontSize: '0.8rem',
+          padding: '6px 12px',
+          marginBottom: 8,
+          borderRadius: 'var(--radius-sm)',
+          background: evalResult.startsWith('Error')
+            ? 'var(--color-loss-dim)'
+            : 'var(--color-profit-dim)',
+          color: evalResult.startsWith('Error')
+            ? 'var(--color-loss)'
+            : 'var(--color-profit)',
+          border: `1px solid ${evalResult.startsWith('Error') ? 'color-mix(in srgb, var(--color-loss) 40%, transparent)' : 'color-mix(in srgb, var(--color-profit) 40%, transparent)'}`,
+        }}>
+          {evalResult}
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <div style={{ padding: 24, color: 'var(--color-text-muted)' }}>

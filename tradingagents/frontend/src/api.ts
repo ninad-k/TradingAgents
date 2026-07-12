@@ -4,7 +4,8 @@ import type {
   DashboardStatus, WatchlistEntry, AnalysisEvent,
   Scoreboard, DecisionRow, Proposal, LearnedParams, Goals,
   AppSettings, SettingsResponse, BrokerSymbolsResponse, AnalysisResult,
-  AnalysisJob, TriggerAnalysisResponse, AnalysisFlow, ActiveAnalysisRun,
+  AnalysisJob, AnalysisFlow, ActiveAnalysisRun, Trade,
+  AnalysisTrace, TokenUsage,
 } from './types'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
@@ -26,7 +27,7 @@ export async function getStatus(): Promise<DashboardStatus> {
   return response.json()
 }
 
-export async function getTrades(limit: number = 50): Promise<any[]> {
+export async function getTrades(limit: number = 20): Promise<Trade[]> {
   const response = await fetch(`${API_BASE}/api/trades?limit=${limit}`)
   return response.json()
 }
@@ -56,17 +57,14 @@ export async function getWatchlist(): Promise<WatchlistEntry[]> {
 export async function triggerAnalysis(
   symbol: string,
   executeTrade: boolean = false,
-  force: boolean = false,
-): Promise<TriggerAnalysisResponse> {
-  const qs = new URLSearchParams({
-    execute_trade: String(executeTrade),
-    force: String(force),
-  })
+  _force: boolean = false,
+): Promise<{ result: AnalysisResult; decision_id?: number; run_id?: string }> {
+  const qs = new URLSearchParams({ execute_trade: String(executeTrade) })
   const response = await fetch(
-    `${API_BASE}/api/watchlist/${symbol}/analyze?${qs.toString()}`,
+    `${API_BASE}/api/codex/run/${symbol}?${qs.toString()}`,
     { method: 'POST' },
   )
-  return parseResponse<TriggerAnalysisResponse>(response, 'trigger analysis')
+  return parseResponse<{ result: AnalysisResult; decision_id?: number; run_id?: string }>(response, 'run Codex strategy')
 }
 
 export async function getAnalysisResult(symbol: string): Promise<AnalysisResult> {
@@ -113,12 +111,64 @@ export async function getAnalysisFlows(opts: {
   return parseResponse<AnalysisFlow[]>(response, 'analysis flow')
 }
 
+/** Full component-level trace for one completed decision. */
+export async function getAnalysisFlowDetail(decisionId: number): Promise<AnalysisTrace> {
+  const response = await fetch(`${API_BASE}/api/analysis-flow/${decisionId}`)
+  return parseResponse<AnalysisTrace>(response, 'analysis flow detail')
+}
+
+/** URL to download the management-ready Markdown report for a decision. */
+export function analysisFlowReportUrl(decisionId: number): string {
+  return `${API_BASE}/api/analysis-flow/${decisionId}/report`
+}
+
+/** Trigger a browser download of the flow report Markdown. */
+export async function downloadFlowReport(decisionId: number, symbol?: string): Promise<void> {
+  const response = await fetch(analysisFlowReportUrl(decisionId))
+  if (!response.ok) throw new Error(`flow report failed (${response.status})`)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `flow_report_${(symbol || 'flow').toUpperCase()}_${decisionId}.md`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+export async function getTokenUsage(): Promise<TokenUsage> {
+  const response = await fetch(`${API_BASE}/api/token-usage`)
+  return parseResponse<TokenUsage>(response, 'token usage')
+}
+
+export async function resetTokenUsage(): Promise<TokenUsage> {
+  const response = await fetch(`${API_BASE}/api/token-usage/reset`, { method: 'POST' })
+  return parseResponse<TokenUsage>(response, 'reset token usage')
+}
+
 export async function clearStuckRuns(): Promise<{ cleared: number }> {
   const response = await fetch(`${API_BASE}/api/analysis/clear-stuck`, { method: 'POST' })
   return parseResponse<{ cleared: number }>(response, 'clear stuck runs')
 }
 
-export async function addToWatchlist(symbol: string, intervalMinutes: number = 1): Promise<any> {
+export async function mockExecuteTrade(
+  symbol: string,
+  signal: 'BUY' | 'SELL',
+): Promise<{ symbol: string; signal: string; execution: Record<string, unknown> }> {
+  const response = await fetch(
+    `${API_BASE}/api/watchlist/${symbol}/mock-execute?signal=${signal}`,
+    { method: 'POST' },
+  )
+  return parseResponse(response, 'mock execute trade')
+}
+
+export async function evaluateNow(): Promise<{ evaluated: number }> {
+  const response = await fetch(`${API_BASE}/api/learning/evaluate-now`, { method: 'POST' })
+  return parseResponse(response, 'evaluate now')
+}
+
+export async function addToWatchlist(symbol: string, intervalMinutes: number = 30): Promise<any> {
   const response = await fetch(`${API_BASE}/api/watchlist/${symbol}?interval_minutes=${intervalMinutes}`, { method: 'POST' })
   return parseResponse<any>(response, 'add watchlist symbol')
 }
@@ -131,7 +181,7 @@ export interface BulkAddResult {
 /** Fan-out N parallel adds to the single-symbol endpoint and aggregate the outcome. */
 export async function addManyToWatchlist(
   symbols: string[],
-  intervalMinutes: number = 1,
+  intervalMinutes: number = 30,
 ): Promise<BulkAddResult> {
   const unique = Array.from(new Set(
     symbols.map(s => s.trim().toUpperCase()).filter(Boolean)

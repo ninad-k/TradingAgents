@@ -125,6 +125,16 @@ class ExecutionEngine:
             # Hold decision or no trade generated
             return None
 
+        from tradingagents.brokers.trade_guard import reward_to_cost_ok
+        cost_ok, cost_message = reward_to_cost_ok(
+            order,
+            symbol_info,
+            min_multiple=float(getattr(self.risk_manager, "min_reward_cost_multiple", 4.0)),
+        )
+        if not cost_ok:
+            logger.warning("Order rejected by transaction-cost gate: %s", cost_message)
+            return None
+
         # Check risk limits
         open_positions = self._get_open_positions()
         allowed, risk_message = self.risk_manager.can_open_trade(order, account_info, open_positions)
@@ -143,7 +153,7 @@ class ExecutionEngine:
         )
 
         if pending:
-            pending.risk_check_message = risk_message
+            pending.risk_check_message = f"{risk_message}; {cost_message}"
             self.pending_orders[pending.pending_id] = pending
 
             # Log proposal

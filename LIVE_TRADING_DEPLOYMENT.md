@@ -1,5 +1,31 @@
 # Live Trading Deployment Guide - Phase G
 
+## Profitability and safety qualification
+
+Live execution now applies the same deterministic guard layer to scheduled,
+dashboard, and Codex-submitted decisions. A BUY/SELL verdict is necessary but
+is not sufficient to place an order. Before broker submission the system:
+
+- requires M1 EMA (9/21/50) and RSI alignment;
+- rejects stale bars, weak volume, and excessive spread relative to ATR;
+- permits only one open position per symbol and enforces total-volume limits;
+- applies trade cooldown, consecutive-loss, and daily-loss circuit breakers;
+- sizes from the actual stop distance, caps live position size, and uses an
+  ATR-aware stop no tighter than three current spreads;
+- requires projected reward to be at least four times the entry spread cost.
+
+Automatic trading is disabled in the supplied safe configuration. Keep the
+system on a demo account until a cost-inclusive, chronological walk-forward
+evaluation has at least 300 realized trades, positive net expectancy, profit
+factor of at least 1.2, and drawdown within the configured limit. These are
+minimum promotion gates, not a guarantee of future profitability.
+
+The relevant environment variables are `TRADINGAGENTS_MAX_POSITION_SIZE`,
+`TRADINGAGENTS_MAX_TOTAL_VOLUME`, `TRADINGAGENTS_TRADE_COOLDOWN_MINUTES`,
+`TRADINGAGENTS_MAX_CONSECUTIVE_LOSSES`, `TRADINGAGENTS_MAX_DAILY_LOSS_USD`,
+`TRADINGAGENTS_MIN_REWARD_COST_MULTIPLE`, `TRADINGAGENTS_ATR_STOP_MULTIPLIER`,
+`TRADINGAGENTS_MAX_SPREAD_ATR_RATIO`, and `TRADINGAGENTS_MIN_VOLUME_RATIO`.
+
 ## ⚠️ CRITICAL: READ THIS BEFORE GOING LIVE
 
 **This guide covers the transition from demo to live trading. Proceed with extreme caution.**

@@ -48,6 +48,12 @@ class Scoreboard:
     max_drawdown_pct: Optional[float]
     total_return_pct: Optional[float]
     per_signal: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Information Coefficient of signed conviction vs realized return (Qlib-style):
+    # ic = Pearson, rank_ic = Spearman, over actionable (BUY/SELL) evaluated rows.
+    ic: Optional[float] = None
+    rank_ic: Optional[float] = None
+    ic_n: int = 0
+    per_confidence_bucket: dict[str, dict[str, float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +66,10 @@ class Scoreboard:
             "max_drawdown_pct": self.max_drawdown_pct,
             "total_return_pct": self.total_return_pct,
             "per_signal": self.per_signal,
+            "ic": self.ic,
+            "rank_ic": self.rank_ic,
+            "ic_n": self.ic_n,
+            "per_confidence_bucket": self.per_confidence_bucket,
         }
 
 
@@ -77,9 +87,122 @@ class ReviewResult:
 # ─── Scoring ───────────────────────────────────────────────────────────────
 
 
-def build_scoreboard(window_days: int) -> Scoreboard:
-    since = datetime.now() - timedelta(days=window_days)
-    rows = store.recent_decisions_with_outcomes(since=since, limit=10000)
+_SIGNAL_DIR = {"BUY": 1.0, "SELL": -1.0, "HOLD": 0.0}
+
+
+def _direction(row: dict[str, Any]) -> Optional[float]:
+    return _SIGNAL_DIR.get((row.get("signal") or "").upper())
+
+
+def _conviction_score(row: dict[str, Any]) -> Optional[float]:
+    """Signed conviction for one decision: +/- confidence by direction.
+
+    Falls back to the discrete +/-1 sign when no confidence was recorded.
+    Returns None for non-actionable / unknown signals.
+    """
+    direction = _direction(row)
+    if direction is None:
+        return None
+    conf = row.get("confidence")
+    if conf is None:
+        return direction
+    try:
+        return direction * float(conf)
+    except (TypeError, ValueError):
+        return direction
+
+
+def _pearson(xs: list[float], ys: list[float]) -> Optional[float]:
+    n = len(xs)
+    if n < 2:
+        return None
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    vx = sum((x - mx) ** 2 for x in xs)
+    vy = sum((y - my) ** 2 for y in ys)
+    if vx <= 0 or vy <= 0:
+        return None
+    return cov / math.sqrt(vx * vy)
+
+
+def _rank(values: list[float]) -> list[float]:
+    """Average ranks (1-based), ties share the mean of their positions."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0  # mean of 1-based positions i+1..j+1
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def compute_ic(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """IC / Rank-IC of signed conviction vs raw forward return.
+
+    Only actionable (BUY/SELL) rows with a known ``pnl_pct`` are used: a HOLD
+    carries no directional prediction. ``pnl_pct`` is stored already signed by
+    direction (positive = correct call), so the raw forward return is recovered
+    as ``pnl_pct * direction`` before correlating against the signed conviction
+    score. ``ic`` is Pearson, ``rank_ic`` Spearman.
+    """
+    scores: list[float] = []
+    returns: list[float] = []
+    for r in rows:
+        if r.get("pnl_pct") is None:
+            continue
+        score = _conviction_score(r)
+        direction = _direction(r)
+        if score is None or not direction:   # skip HOLD / non-actionable
+            continue
+        scores.append(score)
+        returns.append(float(r["pnl_pct"]) * direction)  # un-sign back to raw return
+    n = len(scores)
+    if n < 2:
+        return {"ic": None, "rank_ic": None, "n": n}
+    ic = _pearson(scores, returns)
+    rank_ic = _pearson(_rank(scores), _rank(returns))
+    return {"ic": ic, "rank_ic": rank_ic, "n": n}
+
+
+def _confidence_bucket(conf: Optional[float]) -> str:
+    if conf is None:
+        return "unknown"
+    if conf >= 0.7:
+        return "high"
+    if conf >= 0.5:
+        return "medium"
+    return "low"
+
+
+def _build_confidence_buckets(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+    buckets: dict[str, list[float]] = {}
+    for r in rows:
+        if r.get("pnl_pct") is None:
+            continue
+        buckets.setdefault(_confidence_bucket(r.get("confidence")), []).append(float(r["pnl_pct"]))
+    out: dict[str, dict[str, float]] = {}
+    for name, pnls in buckets.items():
+        wins = sum(1 for p in pnls if p > 0)
+        out[name] = {
+            "count": len(pnls),
+            "win_rate": wins / len(pnls),
+            "mean_pnl_pct": sum(pnls) / len(pnls),
+        }
+    return out
+
+
+def build_scoreboard(window_days: int, rows: Optional[list[dict[str, Any]]] = None) -> Scoreboard:
+    """Score a window. Pass ``rows`` to score an explicit slice (walk-forward);
+    otherwise the trailing ``window_days`` are queried from the store."""
+    if rows is None:
+        since = datetime.now() - timedelta(days=window_days)
+        rows = store.recent_decisions_with_outcomes(since=since, limit=10000)
     pnls = [r["pnl_pct"] for r in rows if r.get("pnl_pct") is not None]
     n_evaluated = len(pnls)
 
@@ -129,6 +252,7 @@ def build_scoreboard(window_days: int) -> Scoreboard:
             "mean_pnl_pct": sum(sig_pnls) / len(sig_pnls),
         }
 
+    ic_stats = compute_ic(rows)
     return Scoreboard(
         n_decisions=len(rows),
         n_evaluated=n_evaluated,
@@ -139,6 +263,82 @@ def build_scoreboard(window_days: int) -> Scoreboard:
         max_drawdown_pct=max_dd,
         total_return_pct=cumulative,
         per_signal=per_signal,
+        ic=ic_stats["ic"],
+        rank_ic=ic_stats["rank_ic"],
+        ic_n=ic_stats["n"],
+        per_confidence_bucket=_build_confidence_buckets(rows),
+    )
+
+
+# ─── Walk-forward split & validation (RD-Agent hypothesis→test→keep) ─────────
+
+
+def _split_rows(
+    rows: list[dict[str, Any]], holdout_frac: float
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Chronological train/holdout split: oldest -> train, most-recent -> holdout.
+
+    No leakage: the split is purely by ``decided_at`` ordering, so holdout rows
+    are strictly newer than train rows.
+    """
+    rows_sorted = sorted(rows, key=lambda r: r.get("decided_at") or "")
+    n = len(rows_sorted)
+    if n == 0:
+        return [], []
+    holdout_n = max(1, int(round(n * holdout_frac)))
+    if n > 1:
+        holdout_n = min(holdout_n, n - 1)  # always leave at least one train row
+    return rows_sorted[: n - holdout_n], rows_sorted[n - holdout_n:]
+
+
+def split_window(
+    window_days: int, holdout_frac: float = 0.3
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Query the trailing window and split it chronologically into (train, holdout)."""
+    since = datetime.now() - timedelta(days=window_days)
+    rows = store.recent_decisions_with_outcomes(since=since, limit=10000)
+    return _split_rows(rows, holdout_frac)
+
+
+def _recently_rejected_keys(limit: int = 20) -> dict[str, str]:
+    """Map of param key -> why it was last rejected, from proposal history.
+
+    Lets the reviewer avoid re-proposing changes that were already tried and
+    rejected (RD-Agent "evolving knowledge", minimal form).
+    """
+    out: dict[str, str] = {}
+    for p in store.list_proposals(status="rejected", limit=limit):
+        diff = p.get("diff") or {}
+        reason = p.get("rejection_reason") or p.get("rationale") or "previously rejected"
+        for key in diff.keys():
+            out.setdefault(key, reason)
+    return out
+
+
+def _validation_verdict(
+    train_sb: Scoreboard, holdout_sb: Scoreboard, goals: dict[str, Any]
+) -> tuple[bool, str]:
+    """Out-of-sample guard: apply a change only when the weakness is confirmed
+    on the held-out slice (persistent), not a train-window fluke.
+
+    Primary metric is win_rate vs ``min_win_rate``. We can't re-run agents on
+    history, so this validates that the *problem* the proposal targets is real
+    out-of-sample, rather than chasing noise in the recent window.
+    """
+    min_wr = goals.get("min_win_rate")
+    if min_wr is None:
+        return True, "no min_win_rate goal; applying on train evidence alone"
+    tw, hw = train_sb.win_rate, holdout_sb.win_rate
+    if tw is None or hw is None:
+        return False, "cannot validate: train/holdout has no evaluated decisions"
+    if tw < min_wr and hw < min_wr:
+        return True, (
+            f"weakness persists out-of-sample (train win_rate {tw:.2f}, "
+            f"holdout {hw:.2f} < goal {min_wr:.2f})"
+        )
+    return False, (
+        f"weakness not confirmed out-of-sample (train win_rate {tw:.2f}, "
+        f"holdout {hw:.2f}); likely noise — not applied"
     )
 
 
@@ -173,27 +373,44 @@ def _ask_llm_for_delta(prompt: str) -> Optional[str]:
 
 def _build_prompt(
     goals: dict[str, Any],
-    scoreboard: Scoreboard,
+    train_sb: Scoreboard,
+    holdout_sb: Scoreboard,
     params: dict[str, Any],
     sample_decisions: list[dict[str, Any]],
+    rejected_keys: dict[str, str],
 ) -> str:
+    rejected_block = (
+        "ALREADY TRIED AND REJECTED (do NOT propose these keys again):\n"
+        f"{json.dumps(rejected_keys, indent=2)}\n\n"
+        if rejected_keys else ""
+    )
     return (
-        "You are tuning a trading strategy's parameters. Apply the scientific "
-        "method: change EXACTLY ONE parameter, justify it, predict the effect.\n\n"
+        "You are tuning a trading strategy's parameters using the scientific "
+        "method (walk-forward). Form ONE hypothesis: identify the weakest metric "
+        "on the TRAIN scoreboard, explain WHY it is weak, and change EXACTLY ONE "
+        "parameter you predict will improve it. Your change will be validated "
+        "against the HOLDOUT scoreboard before it is applied.\n\n"
+        "Metrics note: `ic`/`rank_ic` are the Information Coefficient of decision "
+        "conviction vs realized forward return (range -1..1; higher = better "
+        "calibrated). `per_confidence_bucket` shows win-rate by conviction tier.\n\n"
         "GOALS (numeric targets):\n"
         f"{json.dumps(goals, indent=2)}\n\n"
-        "RECENT PERFORMANCE (window scoreboard):\n"
-        f"{json.dumps(scoreboard.to_dict(), indent=2)}\n\n"
+        "TRAIN scoreboard (older slice — form the hypothesis here):\n"
+        f"{json.dumps(train_sb.to_dict(), indent=2)}\n\n"
+        "HOLDOUT scoreboard (most-recent slice — your change is validated here):\n"
+        f"{json.dumps(holdout_sb.to_dict(), indent=2)}\n\n"
+        f"{rejected_block}"
         "CURRENT learned_params.json (the ONLY thing you may edit):\n"
         f"{json.dumps(params, indent=2)}\n\n"
         f"SAMPLE OF {len(sample_decisions)} RECENT DECISIONS (most recent first):\n"
         f"{json.dumps(sample_decisions, indent=2, default=str)[:4000]}\n\n"
         "Respond with a SINGLE JSON object and nothing else, exactly this shape:\n"
         "{\n"
+        '  "hypothesis": "<which metric is weak and why this change should help>",\n'
         '  "key": "<one key from learned_params>",\n'
         '  "old": <current value>,\n'
         '  "new": <proposed value, same type as old>,\n'
-        '  "rationale": "<one or two sentences explaining WHY, tied to the data>"\n'
+        '  "rationale": "<one or two sentences tying the change to the data>"\n'
         "}\n"
         "Rules: exactly one key. Same type. Do not invent new keys. "
         "If the data is insufficient to justify a change, return "
@@ -270,48 +487,103 @@ def run_review(auto_apply: Optional[bool] = None) -> ReviewResult:
     goals = learning_config.load_goals()
     params_before = learning_config.load_learned_params()
     window_days = int(goals.get("review_window_days", 30))
-    scoreboard = build_scoreboard(window_days)
+    holdout_frac = float(goals.get("walk_forward_holdout_frac", 0.3))
 
-    min_n = int(goals.get("min_decisions_for_review", 20))
+    since = datetime.now() - timedelta(days=window_days)
+    all_rows = store.recent_decisions_with_outcomes(since=since, limit=10000)
+    scoreboard = build_scoreboard(window_days, rows=all_rows)
+    train_rows, holdout_rows = _split_rows(all_rows, holdout_frac)
+    train_sb = build_scoreboard(window_days, rows=train_rows)
+    holdout_sb = build_scoreboard(window_days, rows=holdout_rows)
+
+    # Gate 1: enough total + per-slice evaluated decisions to learn anything.
+    min_n = int(goals.get("min_decisions_for_review", 5))
+    min_train = int(goals.get("min_train_decisions", 5))
+    min_holdout = int(goals.get("min_holdout_decisions", 3))
+    shortfall = None
     if scoreboard.n_evaluated < min_n:
+        shortfall = f"insufficient data: {scoreboard.n_evaluated}/{min_n} evaluated decisions"
+    elif train_sb.n_evaluated < min_train or holdout_sb.n_evaluated < min_holdout:
+        shortfall = (
+            f"insufficient data for walk-forward: train {train_sb.n_evaluated}/{min_train}, "
+            f"holdout {holdout_sb.n_evaluated}/{min_holdout} evaluated decisions"
+        )
+    if shortfall is not None:
+        # Record in DB so the Proposals tab shows the review ran (even if skipped).
+        store.record_params_proposal(
+            params=params_before, diff=None, rationale=shortfall, applied=False,
+        )
         proposal_path = _write_proposal_md(
-            goals, scoreboard, params_before, proposal=None,
-            applied=False, reason=f"insufficient data: {scoreboard.n_evaluated}/{min_n}",
+            goals, train_sb, holdout_sb, params_before, proposal=None,
+            applied=False, reason=shortfall,
         )
         return ReviewResult(
             scoreboard=scoreboard, goals=goals, params_before=params_before,
             proposal=None, applied=False,
-            rejection_reason="insufficient data", proposal_path=proposal_path,
+            rejection_reason=shortfall, proposal_path=proposal_path,
         )
 
-    since = datetime.now() - timedelta(days=window_days)
-    sample = store.recent_decisions_with_outcomes(since=since, limit=15)
-
-    raw = _ask_llm_for_delta(_build_prompt(goals, scoreboard, params_before, sample))
+    # Gate 2: ask the LLM to form a hypothesis on the TRAIN slice, avoiding
+    # knobs we already tried and rejected.
+    rejected_keys = _recently_rejected_keys()
+    sample = train_rows[-15:][::-1]  # most-recent-first sample from the train slice
+    raw = _ask_llm_for_delta(
+        _build_prompt(goals, train_sb, holdout_sb, params_before, sample, rejected_keys)
+    )
     parsed = _extract_json(raw or "")
+    hypothesis = (parsed or {}).get("hypothesis") if isinstance(parsed, dict) else None
     proposal, rejection = _validate_delta(parsed, params_before)
+
+    # Gate 3: knowledge guard — never re-apply a recently-rejected knob.
+    if proposal is not None and proposal["key"] in rejected_keys:
+        rejection = (
+            f"knob {proposal['key']!r} was recently rejected: {rejected_keys[proposal['key']]}"
+        )
+        proposal = None
+
+    # Gate 4: out-of-sample validation — only apply if the weakness is confirmed
+    # on the holdout slice (don't chase train-window noise).
+    validation_reason = None
+    validated = False
+    if proposal is not None:
+        validated, validation_reason = _validation_verdict(train_sb, holdout_sb, goals)
+        if not validated:
+            rejection = validation_reason
 
     applied = False
     new_params = params_before
-    if proposal is not None and auto_apply:
+    if proposal is not None and validated and auto_apply:
         new_params = dict(params_before)
         new_params[proposal["key"]] = proposal["new"]
         learning_config.save_learned_params(new_params)
         applied = True
+
+    # Persist hypothesis + validation + train/holdout context in the rationale so
+    # the loop has a durable record of what was tried and why.
+    if proposal is not None:
+        rationale = proposal.get("rationale", "")
+        parts = [p for p in (
+            f"Hypothesis: {hypothesis}" if hypothesis else None,
+            rationale or None,
+            f"Validation: {validation_reason}" if validation_reason else None,
+            f"(train win_rate={train_sb.win_rate}, holdout win_rate={holdout_sb.win_rate}, "
+            f"train ic={train_sb.ic})",
+        ) if p]
+        recorded_rationale = " | ".join(parts)
+    else:
+        recorded_rationale = rejection
 
     diff = (
         {proposal["key"]: {"from": proposal["old"], "to": proposal["new"]}}
         if proposal else None
     )
     store.record_params_proposal(
-        params=new_params,
-        diff=diff,
-        rationale=(proposal or {}).get("rationale") if proposal else rejection,
-        applied=applied,
+        params=new_params, diff=diff, rationale=recorded_rationale, applied=applied,
     )
 
     proposal_path = _write_proposal_md(
-        goals, scoreboard, params_before, proposal, applied, rejection,
+        goals, train_sb, holdout_sb, params_before, proposal, applied,
+        rejection, hypothesis=hypothesis,
     )
     return ReviewResult(
         scoreboard=scoreboard,
@@ -319,18 +591,20 @@ def run_review(auto_apply: Optional[bool] = None) -> ReviewResult:
         params_before=params_before,
         proposal=proposal,
         applied=applied,
-        rejection_reason=rejection,
+        rejection_reason=rejection if not applied else None,
         proposal_path=proposal_path,
     )
 
 
 def _write_proposal_md(
     goals: dict[str, Any],
-    scoreboard: Scoreboard,
+    train_sb: Scoreboard,
+    holdout_sb: Scoreboard,
     params_before: dict[str, Any],
     proposal: Optional[dict[str, Any]],
     applied: bool,
     reason: Optional[str],
+    hypothesis: Optional[str] = None,
 ) -> Path:
     PROPOSALS_DIR.mkdir(parents=True, exist_ok=True)
     fname = datetime.now().strftime("%Y-%m-%d_%H%M%S") + ".md"
@@ -346,9 +620,14 @@ def _write_proposal_md(
         json.dumps(goals, indent=2),
         "```",
         "",
-        "## Scoreboard",
+        "## Train scoreboard (hypothesis formed here)",
         "```json",
-        json.dumps(scoreboard.to_dict(), indent=2),
+        json.dumps(train_sb.to_dict(), indent=2),
+        "```",
+        "",
+        "## Holdout scoreboard (validation slice)",
+        "```json",
+        json.dumps(holdout_sb.to_dict(), indent=2),
         "```",
         "",
         "## Current learned_params",
@@ -358,6 +637,8 @@ def _write_proposal_md(
         "",
         "## Proposal",
     ]
+    if hypothesis:
+        lines += [f"**Hypothesis:** {hypothesis}", ""]
     if proposal:
         lines += [
             "```json",
@@ -366,6 +647,8 @@ def _write_proposal_md(
             "",
             f"**Rationale:** {proposal.get('rationale', '')}",
         ]
+        if reason:
+            lines += ["", f"**Validation:** {reason}"]
     else:
         lines += [f"_None._ Reason: `{reason or 'unknown'}`"]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

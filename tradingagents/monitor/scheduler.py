@@ -252,6 +252,236 @@ def _apply_learned_gates(
     return "HOLD", annotated, reason
 
 
+# ── Mock content variant library ──────────────────────────────────────────
+# Each component has multiple plausible commentary templates so consecutive
+# mock runs produce visibly different narratives. `{signal}`/`{opposite}`/
+# `{symbol}` placeholders are filled per run.
+
+_MOCK_VARIANTS: Dict[str, list] = {
+    "market_analyst": [
+        "{symbol} price action: ascending triangle on the 4H. RSI 62, MACD bullish crossover. Volume +18 % vs 20-day avg. MT5 tick feed live.",
+        "{symbol} consolidating just below resistance. RSI 54 neutral, MACD flat. ATR contracting — breakout setup forming. TradingView indicators loaded.",
+        "{symbol} strong impulse leg up. Higher highs/higher lows intact. 50EMA acting as dynamic support. Volume profile shows clear value area.",
+        "{symbol} reversal signal off the 200EMA. Bullish engulfing on daily, RSI exiting oversold (32 → 41). Tape reading positive.",
+        "{symbol} range-bound with declining volatility. RSI 49, MACD curl. Awaiting catalyst — bias slightly {signal}-leaning given larger trend.",
+    ],
+    "sentiment_analyst": [
+        "Social sentiment: 64 % {signal_lower}-leaning across X/Twitter. Reddit r/wallstreetbets net positive. EODHD fear/greed: 58 (neutral-greedy).",
+        "Crowd sentiment skewed {signal_lower} — 71 % bullish mentions on FinTwit (24h). No viral negative narratives. Influencer chatter constructive.",
+        "Sentiment mixed but tilting {signal_lower}. X engagement +22 % vs week-ago baseline. Reddit DD posts gaining traction. EODHD score: 52.",
+        "Strong {signal_lower} bias in retail sentiment (67 %). Options flow shows unusual call activity. Sentiment momentum building.",
+        "Sentiment neutral-to-{signal_lower}. No panic, no euphoria. Healthy positioning according to crowd-derived indicators.",
+    ],
+    "news_analyst": [
+        "Bloomberg headline scan: no major macro shock. Fed speakers neutral-dovish. Sector news mildly supportive. Finnhub calendar clear next 24h.",
+        "Reuters/Bloomberg: central-bank stance unchanged. CPI in line with expectations. Earnings season tailwind. No red-flag events on radar.",
+        "News flow constructive. Geopolitical risk muted. Commodity prices stable. Finnhub event calendar clean through tomorrow's close.",
+        "Macro backdrop quiet. PMI prints slightly above consensus. Dollar index sideways. News-driven volatility expected to stay subdued.",
+        "Mixed news tape. One negative sector story balanced by broader risk-on flow. Net read: neutral with slight {signal_lower} skew.",
+    ],
+    "fundamentals_analyst": [
+        "Fundamentals stable. No recent insider sells. Financial history clean. Balance sheet supports continuation of current trend.",
+        "Company profile healthy. Margins expanding YoY. Insider buying in last 30 days. Fundamentals align with technical setup.",
+        "Mixed fundamentals — top-line growth strong but margin compression noted. Net: neutral, defer to price action.",
+        "Fundamentals improving. Recent earnings beat, guidance raised. Insider transactions net positive. Solid base for a {signal}.",
+        "Fundamental picture unchanged from last review. No catalysts expected near-term. Technical-driven entry preferred.",
+    ],
+    "bull_researcher": [
+        "Bull case: momentum, positive sentiment, and clean technicals all align for a {signal} entry. Risk/reward favourable at current levels.",
+        "Bullish thesis intact: trend up, sentiment supportive, no fundamental headwinds. Asymmetric upside if breakout confirms.",
+        "Bull view: macro tailwind + technical setup = high-conviction long. Stop placement clear, target 2.5R away.",
+        "Bullish read on data. Volume confirmation, sector strength, oversold bounce potential. Argues for {signal} now, scale later.",
+        "Bull desk: defensive positioning already in price. Setup offers favourable skew. Recommend {signal} at market with stop below structure.",
+    ],
+    "bear_researcher": [
+        "Bear case: elevated macro uncertainty and stretched positioning argue for caution. A {opposite} or flat stance would reduce drawdown risk.",
+        "Bearish counter: extended rally, RSI nearing overbought on weekly, sentiment crowded. Risk of mean reversion elevated.",
+        "Bear desk: thin liquidity above current price could trigger fast unwind. Prefer to wait for pullback or fade strength.",
+        "Bearish view: divergences forming on momentum indicators. Smart-money flow shifting defensive. Caution warranted.",
+        "Bear thesis: late-cycle dynamics, macro fragility. {opposite} or sit-out cheaper than chasing.",
+    ],
+    "research_manager": [
+        "Debate concluded. Bull arguments more compelling given current data. Research verdict: **{signal}** with moderate conviction.",
+        "Weighing bull/bear: bull case has stronger technical support, bear case relies on macro tail. Verdict: **{signal}**, sized prudently.",
+        "Research debate productive. Both sides have merit. Tilting **{signal}** based on near-term setup; revisit if {opposite} thesis materialises.",
+        "After debate: bull case wins on confluence (price + sentiment + flow). **{signal}** approved with standard risk parameters.",
+        "Manager note: the bear case is the longer-term tail risk; bull case is the present-day setup. Approve **{signal}** for the tactical window.",
+    ],
+    "trader": [
+        "Plan: **{signal}** {symbol} at market. Size 1.0 % of equity. SL 1.5 %, TP 3.0 %. Hold horizon 24h.",
+        "Plan: enter **{signal}** {symbol} at market. Risk 0.75 % of account. SL at structure (1.8 %), TP at 2x SL.",
+        "Trade plan: **{signal}** {symbol}, 1.2 % equity, SL 1.2 %, TP 2.4 %. Trail stop to break-even at 1R.",
+        "Execution plan: **{signal}** {symbol}, market order, 0.9 % risk, tiered exits at 1.5R and 3R.",
+        "Trader: **{signal}** {symbol} at market, conservative 0.6 % risk given elevated vol. SL 1.0 %, TP 2.5 %.",
+    ],
+    "aggressive_risk": [
+        "Aggressive desk: approve {signal}. High-conviction setup; willing to accept full position size.",
+        "Aggressive: this is exactly the asymmetric setup we want. Approve {signal} at full size, even consider 1.25x.",
+        "Aggressive risk: green light. Setup justifies full allocation. {signal} with conviction.",
+        "Aggressive desk: approve {signal} at standard size — would size larger but respecting portfolio caps.",
+    ],
+    "neutral_risk": [
+        "Neutral desk: approve {signal} at 75 % standard size. Macro tail-risk warrants slight reduction.",
+        "Neutral: approve {signal}, standard size. Risk/reward acceptable, no overrides needed.",
+        "Neutral risk: green-light {signal} at 80 % size. Slight haircut for prevailing vol regime.",
+        "Neutral desk: approve {signal} at full size with standard stops. No adjustment to risk parameters.",
+    ],
+    "conservative_risk": [
+        "Conservative desk: approve {signal} at 50 % size. Preserve capital; tighten stop to 1.0 %.",
+        "Conservative: approve {signal} but at 40 % size with tight 0.8 % stop. Capital preservation priority.",
+        "Conservative risk: scale {signal} to 60 % size, move stop closer (1.1 %). Tail risk in macro warrants caution.",
+        "Conservative desk: reluctant approve {signal} at 45 % size. Prefer to deploy more after confirmation.",
+    ],
+}
+
+
+def _build_mock_stage_data(signal: str, symbol: str, final_text: str) -> list:
+    """Return per-component mock content using randomly-picked template variants."""
+    import random
+    opposite = "SELL" if signal == "BUY" else "BUY"
+    ctx = {
+        "signal": signal,
+        "signal_lower": signal.lower(),
+        "opposite": opposite,
+        "symbol": symbol,
+    }
+    stages = []
+    for component_key in (
+        "market_analyst", "sentiment_analyst", "news_analyst", "fundamentals_analyst",
+        "bull_researcher", "bear_researcher", "research_manager", "trader",
+        "aggressive_risk", "neutral_risk", "conservative_risk",
+    ):
+        template = random.choice(_MOCK_VARIANTS[component_key])
+        stages.append((component_key, template.format(**ctx)))
+    stages.append(("portfolio_manager", final_text))
+    return stages
+
+
+def simulate_mock_pipeline(
+    run_id: str,
+    signal: str,
+    symbol: str,
+    final_text: str,
+    total_duration_seconds: Optional[float] = None,
+) -> None:
+    """Animate all 12 pipeline stages over a random 20–30s window.
+
+    Picks a different template per component each call, then distributes the
+    total wall-clock time across stages with per-stage randomness so it feels
+    like a real LLM run.
+    """
+    import random
+    import time as _time
+
+    total = total_duration_seconds if total_duration_seconds is not None else random.uniform(20.0, 30.0)
+    stages = _build_mock_stage_data(signal, symbol, final_text)
+
+    # Random weights → random per-stage durations summing to `total`.
+    weights = [random.uniform(0.5, 1.6) for _ in stages]
+    weight_sum = sum(weights) or 1.0
+    delays = [(w / weight_sum) * total for w in weights]
+
+    for (component_key, mock_content), delay in zip(stages, delays):
+        live_progress.set_stage(run_id, component_key.replace("_", " ").title())
+        live_progress.mark_component(run_id, component_key, "running")
+        _time.sleep(max(0.2, delay))
+        live_progress.mark_component(run_id, component_key, "done", mock_content)
+
+
+def _run_mock_analysis(
+    entry: WatchlistEntry,
+    config: Dict,
+    event_callback: Optional[Callable],
+    execute_trade: bool,
+    allow_auto_trade_config: bool,
+    run_id: str,
+    analysis_date: str,
+    progress: Callable[[str], None],
+) -> AnalysisResult:
+    """Skip LLM pipeline and randomly pick BUY or SELL for testing purposes.
+
+    Records a real decision, executes a real trade (if auto_trade is on or
+    execute_trade is True), and flows data to the Scoreboard and Decisions
+    screens exactly as a real analysis would.
+    """
+    import random
+    symbol = entry.symbol
+    signal = random.choice(["BUY", "SELL"])
+    mock_text = (
+        f"**Rating**: {signal}\n"
+        f"**Confidence**: 0.85\n\n"
+        f"Mock analysis — LLM pipeline bypassed for testing. Signal randomly assigned."
+    )
+
+    try:
+        simulate_mock_pipeline(run_id, signal, symbol, mock_text)
+        live_progress.set_stage(run_id, f"Mock {signal} — executing")
+        progress(f"Mock mode: randomly selected {signal}")
+
+        # In mock mode the whole point is to test execution — always fire the trade.
+        execution = _maybe_execute_trade(
+            symbol=symbol,
+            decision_text=mock_text,
+            signal=signal,
+            decision_date=analysis_date,
+            config=config,
+            execute_trade=True,
+            allow_auto_trade_config=False,
+        )
+
+        watchlist.update_result(symbol, mock_text, signal)
+
+        result = AnalysisResult(
+            symbol=symbol,
+            success=True,
+            signal=signal,
+            decision_text=mock_text,
+            execution=execution,
+        )
+        store.save_result(result)
+        decision_id = _record_ledger(result)
+
+        # Stamp entry price immediately from execution so the outcomes evaluator
+        # can compute PnL without overwriting the actual fill price.
+        if decision_id and execution and execution.get("execution_price"):
+            try:
+                from tradingagents.monitor import learning_config as _lc
+                _params = {}
+                try:
+                    _params = _lc.load_learned_params()
+                except Exception:
+                    pass
+                horizon = int(_params.get("hold_horizon_hours", 24) or 24)
+                store.save_outcome(
+                    decision_id=decision_id,
+                    entry_price=execution["execution_price"],
+                    exit_price=None,
+                    pnl_pct=None,
+                    horizon_hours=horizon,
+                )
+            except Exception as _e:
+                logger.warning("mock analysis: could not stamp entry price: %s", _e)
+
+        live_progress.finish_run(run_id, "success", signal=signal)
+        if event_callback:
+            event_callback("analysis_complete", result.to_dict())
+
+        logger.info("Mock analysis for %s: %s (execution=%s)", symbol, signal, execution)
+        return result
+
+    except Exception as exc:
+        logger.error("Mock analysis failed for %s: %s", symbol, exc, exc_info=True)
+        result = AnalysisResult(
+            symbol=symbol, success=False, signal="UNKNOWN",
+            decision_text="", error=str(exc),
+        )
+        store.save_result(result)
+        live_progress.finish_run(run_id, "error", error=str(exc))
+        if event_callback:
+            event_callback("analysis_error", result.to_dict())
+        return result
+
+
 def _run_single_analysis(
     entry: WatchlistEntry,
     config: Dict,
@@ -264,6 +494,34 @@ def _run_single_analysis(
     """Run analysis for one watchlist symbol. Returns AnalysisResult."""
     symbol = entry.symbol
     analysis_date = datetime.now().strftime("%Y-%m-%d")
+
+    # ── "Stop Sonnet" kill switch + token budget ─────────────────────────────
+    # Auto-latch the switch off once the running token total crosses the budget,
+    # then skip the LLM pipeline entirely so no further tokens are spent. This
+    # runs before start_run() so a disabled state produces no live flow entry.
+    from tradingagents.monitor.token_usage import get_token_tracker
+    from tradingagents.monitor import app_settings
+
+    budget = int(config.get("token_budget_max", 0) or 0)
+    if budget > 0 and config.get("llm_enabled", True) and get_token_tracker().total() >= budget:
+        logger.warning(
+            "Token budget %s reached; auto-disabling LLM (Stop Sonnet) for %s", budget, symbol
+        )
+        try:
+            app_settings.update_settings({"llm_enabled": False})
+        except Exception:
+            logger.warning("Failed to persist llm_enabled=False after budget breach", exc_info=True)
+        config = {**config, "llm_enabled": False}
+    if not config.get("llm_enabled", True):
+        logger.info("LLM disabled (Stop Sonnet); skipping analysis for %s", symbol)
+        return AnalysisResult(
+            symbol=symbol,
+            success=False,
+            signal="HOLD",
+            decision_text="LLM analysis disabled (Stop Sonnet).",
+            error="llm_disabled",
+        )
+    # ─────────────────────────────────────────────────────────────────────────
 
     logger.info(f"Starting analysis for {symbol} ({entry.display_name})")
 
@@ -289,6 +547,20 @@ def _run_single_analysis(
     ]
     run_id = live_progress.start_run(symbol, applicable)
 
+    # ── Mock mode: skip LLM entirely, randomly pick BUY/SELL ──────────────
+    if config.get("mock_mode_enabled", False):
+        return _run_mock_analysis(
+            entry=entry,
+            config=config,
+            event_callback=event_callback,
+            execute_trade=execute_trade,
+            allow_auto_trade_config=allow_auto_trade_config,
+            run_id=run_id,
+            analysis_date=analysis_date,
+            progress=progress,
+        )
+    # ──────────────────────────────────────────────────────────────────────
+
     try:
         live_progress.set_stage(run_id, "Preparing data and config")
         progress("Running: preparing data and config")
@@ -311,6 +583,18 @@ def _run_single_analysis(
                 "news_data": "yfinance",
             }
 
+        # An explicit intraday timeframe (e.g. M1) is only honored by the
+        # broker-native MT5 vendor — TradingView/yfinance use their own pickers.
+        # Put MT5 first so 1-minute bars actually reach the Market Analyst.
+        market_tf = str(config.get("market_timeframe", "auto") or "auto").upper()
+        if market_tf not in ("", "AUTO"):
+            symbol_config["data_vendors"] = {
+                "core_stock_apis": "mt5,tradingview,yfinance",
+                "technical_indicators": "tradingview,yfinance",
+                "fundamental_data": "yfinance",
+                "news_data": "yfinance",
+            }
+
         live_progress.set_stage(run_id, "Building LLM graph")
         progress("Running: building LLM graph")
         # Build the graph with only applicable analysts
@@ -318,6 +602,7 @@ def _run_single_analysis(
             selected_analysts=entry.analysts,
             config=symbol_config,
             debug=False,
+            callbacks=[get_token_tracker().callback()],
         )
 
         live_progress.set_stage(run_id, "Running LLM pipeline")
@@ -374,12 +659,16 @@ def _run_single_analysis(
         store.save_result(result)
         decision_id = _record_ledger(result)
         if decision_id is not None:
+            trace = _build_analysis_trace(final_state, result)
             store.save_analysis_trace(
                 decision_id=decision_id,
                 symbol=symbol,
-                trace=_build_analysis_trace(final_state, result),
+                trace=trace,
                 created_at=result.timestamp,
             )
+            # Persist a management-ready flow report + rolling summary.
+            from tradingagents.monitor.flow_report import write_flow_report
+            write_flow_report(symbol_config, result, trace, decision_id)
 
         logger.info(f"Analysis complete for {symbol}: {signal}")
 
@@ -446,17 +735,56 @@ def _maybe_execute_trade(
             decision.rating = PortfolioRating.SELL
 
         connector = get_shared_mt5_connector(account_type=trading_mode)
+        if not connector.is_connected() and not connector.connect():
+            return {"status": "blocked", "reason": "Broker connection unavailable"}
+
+        from tradingagents.brokers.trade_guard import (
+            load_mt5_setup, operational_guard, qualify_setup,
+        )
+        operational_ok, operational_reason = operational_guard(
+            symbol=symbol,
+            positions=connector.get_positions(),
+            history=connector.get_trade_history(days=1, limit=100),
+            max_total_volume=float(config.get("max_total_volume", 2.0)),
+            cooldown_minutes=int(config.get("trade_cooldown_minutes", 15)),
+            max_consecutive_losses=int(config.get("max_consecutive_losses", 3)),
+            max_daily_loss_usd=float(config.get("max_daily_loss_usd", 500)),
+        )
+        if not operational_ok:
+            return {"status": "blocked", "reason": operational_reason}
+
+        if config.get("setup_filter_enabled", True):
+            try:
+                setup = load_mt5_setup(
+                    symbol,
+                    signal,
+                    timeframe=str(config.get("market_timeframe", "M1") or "M1"),
+                )
+                setup_ok, setup_reason = qualify_setup(
+                    setup,
+                    max_spread_atr_ratio=float(config.get("max_spread_atr_ratio", 0.40)),
+                    min_volume_ratio=float(config.get("min_volume_ratio", 0.20)),
+                )
+                if not setup_ok:
+                    return {"status": "blocked", "reason": setup_reason, "setup": setup.to_dict()}
+            except Exception as exc:
+                return {"status": "blocked", "reason": f"Setup validation unavailable: {exc}"}
         risk_percent = float(config.get("max_risk_per_trade_percent", 0.5) or 0.5)
         risk_usd = config.get("max_risk_per_trade_usd")
         generator = OrderGenerator(
             max_risk_percent=risk_percent,
             max_risk_usd=risk_usd,
             trade_comment=str(config.get("trade_comment") or "TradingAgent2.0"),
+            max_position_size=float(config.get("max_position_size", 0.5)),
+            atr_stop_multiplier=float(config.get("atr_stop_multiplier", 1.25)),
         )
         risk_manager = RiskManager(
             max_open_positions=int(config.get("max_open_positions", 5) or 5),
             max_risk_per_trade_percent=risk_percent,
             max_risk_per_trade_usd=risk_usd,
+            max_symbol_positions=int(config.get("max_symbol_positions", 1)),
+            max_total_volume=float(config.get("max_total_volume", 2.0)),
+            min_reward_cost_multiple=float(config.get("min_reward_cost_multiple", 4.0)),
         )
         engine = ExecutionEngine(
             connector=connector,
@@ -486,22 +814,31 @@ def _maybe_execute_trade(
 
 
 def _record_ledger(result: AnalysisResult) -> Optional[int]:
-    """Append the decision to the append-only ledger for the learning loop."""
+    """Append the decision to the append-only ledger for the learning loop.
+
+    Only records successful analyses with a real signal (BUY/SELL/HOLD).
+    Failed runs and UNKNOWN signals are not actionable decisions and would
+    pollute the Decisions ledger and Scoreboard metrics.
+    """
+    if not result.success or result.signal not in {"BUY", "SELL", "HOLD"}:
+        return None
     try:
         params = learning_config.load_learned_params()
     except Exception:
         params = {}
     horizon = int(params.get("hold_horizon_hours", 24) or 24)
+    confidence = _parse_confidence(result.decision_text)
     try:
         return store.record_decision(
             symbol=result.symbol,
             signal=result.signal,
             decision_text=result.decision_text,
-            success=result.success,
+            success=True,
             horizon_hours=horizon,
             params_snapshot=params or None,
-            error=result.error,
+            error=None,
             decided_at=result.timestamp,
+            confidence=confidence,
         )
     except Exception as e:
         logger.warning("Failed to record decision to ledger: %s", e)

@@ -56,15 +56,31 @@ TV_EXCHANGE_MAP = {
 }
 
 
+_tv_client = None
+_tv_client_lock = None
+
 def _get_tv_client():
-    """Get TradingView data feed client."""
+    """Return a shared TvDatafeed instance, creating it once per process.
+
+    TvDatafeed opens a WebSocket to TradingView on construction. Creating a
+    new instance on every tool call triggers repeated handshakes that quickly
+    hit TradingView's 429 rate limit and drop subsequent connections.
+    """
+    global _tv_client, _tv_client_lock
+    import threading
+    if _tv_client_lock is None:
+        _tv_client_lock = threading.Lock()
     try:
         from tvDatafeed import TvDatafeed
-        return TvDatafeed()
     except ImportError:
         raise ImportError(
             "TradingView datafeed is not installed. Run: pip install tradingview-datafeed"
         )
+    with _tv_client_lock:
+        if _tv_client is None:
+            logger.info("Creating shared TvDatafeed client (one-time WebSocket connection)")
+            _tv_client = TvDatafeed()
+        return _tv_client
 
 
 def _get_tv_interval(days_range: int):

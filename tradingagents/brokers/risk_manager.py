@@ -32,6 +32,9 @@ class RiskManager:
         trailing_stop_distance: Optional[float] = None,
         max_risk_per_trade_percent: float = 2.0,
         max_risk_per_trade_usd: Optional[float] = None,
+        max_symbol_positions: int = 1,
+        max_total_volume: float = float("inf"),
+        min_reward_cost_multiple: float = 4.0,
     ):
         """
         Initialize RiskManager.
@@ -52,6 +55,9 @@ class RiskManager:
             max_risk_per_trade_percent=max_risk_per_trade_percent,
             max_risk_per_trade_usd=max_risk_per_trade_usd,
         )
+        self.max_symbol_positions = max(1, int(max_symbol_positions))
+        self.max_total_volume = float(max_total_volume)
+        self.min_reward_cost_multiple = float(min_reward_cost_multiple)
 
         # Track daily starting balance for daily loss calculation
         self._daily_start_balance: Optional[float] = None
@@ -76,6 +82,17 @@ class RiskManager:
             (allowed: bool, message: str)
         """
         checks = []
+
+        symbol_positions = [p for p in open_positions if p.symbol.upper() == order.symbol.upper()]
+        if len(symbol_positions) >= self.max_symbol_positions:
+            checks.append((False, f"Existing {order.symbol} position blocks duplicate exposure"))
+        else:
+            checks.append((True, "Per-symbol position count OK"))
+        total_volume = sum(float(p.volume) for p in open_positions) + float(order.volume)
+        if total_volume > self.max_total_volume:
+            checks.append((False, f"Portfolio volume {total_volume:g} exceeds {self.max_total_volume:g}"))
+        else:
+            checks.append((True, "Portfolio volume OK"))
 
         # Check 1: Position count
         if len(open_positions) >= self.limits.max_open_positions:

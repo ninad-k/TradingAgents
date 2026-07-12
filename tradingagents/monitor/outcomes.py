@@ -41,18 +41,50 @@ def evaluate_pending(now: Optional[datetime] = None, limit: int = 100) -> int:
 
     processed = 0
     for decision in pending[:limit]:
-        _evaluate_one(decision, now)
+        _evaluate_one(decision, now, exit_ts_override=None)
         processed += 1
     return processed
 
 
-def _evaluate_one(decision: dict, now: datetime) -> None:
+def evaluate_all_now(limit: int = 500) -> int:
+    """Force-evaluate ALL pending decisions using current price as exit.
+
+    Ignores the horizon check — useful for testing/demo where you don't
+    want to wait 24h to see PnL. Uses current market price as the exit
+    price, so it shows "unrealized PnL if closed now."
+    """
+    now = datetime.now()
+    with store._conn() as conn:
+        rows = conn.execute(
+            "SELECT d.*, o.entry_price AS existing_entry_price "
+            "FROM decisions d "
+            "LEFT JOIN decision_outcomes o ON o.decision_id = d.id "
+            "WHERE (o.decision_id IS NULL OR o.exit_price IS NULL) AND d.success = 1 "
+            "ORDER BY d.decided_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+
+    if not rows:
+        return 0
+
+    processed = 0
+    for row in rows:
+        from tradingagents.monitor.store import _row_to_decision_dict
+        d = _row_to_decision_dict(row)
+        d["existing_entry_price"] = row["existing_entry_price"]
+        _evaluate_one(d, now, exit_ts_override=now)
+        processed += 1
+
+    return processed
+
+
+def _evaluate_one(decision: dict, now: datetime, exit_ts_override: Optional[datetime] = None) -> None:
     decision_id = decision["id"]
     symbol = decision["symbol"]
     signal = decision["signal"]
     horizon_hours = int(decision["horizon_hours"])
     decided_at = datetime.fromisoformat(decision["decided_at"])
-    exit_ts = decided_at + timedelta(hours=horizon_hours)
+    exit_ts = exit_ts_override or (decided_at + timedelta(hours=horizon_hours))
 
     if signal.upper() not in _SIGNAL_SIGN:
         store.save_outcome(
@@ -65,7 +97,10 @@ def _evaluate_one(decision: dict, now: datetime) -> None:
         )
         return
 
-    entry = get_close_at(symbol, decided_at)
+    # Prefer the actual execution price stored when the trade was placed
+    # (e.g. from mock-execute or auto-trade) over a price-feed lookup.
+    existing_entry = decision.get("existing_entry_price")
+    entry = existing_entry if existing_entry else get_close_at(symbol, decided_at)
     exit_ = get_close_at(symbol, exit_ts)
 
     if entry is None or exit_ is None:

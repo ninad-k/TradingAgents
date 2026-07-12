@@ -37,6 +37,37 @@ def _pick_timeframe(days_range: int):
     return mt5.TIMEFRAME_D1, days_range
 
 
+# How many recent bars to pull when an explicit intraday timeframe is forced.
+# Intraday windows are anchored to "now" (copy_rates_from_pos) rather than the
+# analyst's multi-day date range, which for M1 would be tens of thousands of bars.
+_EXPLICIT_TF_BARS = {
+    "M1": 500, "M5": 500, "M15": 400, "M30": 400,
+    "H1": 300, "H4": 200, "D1": 250,
+}
+
+
+def _explicit_timeframe():
+    """Resolve a forced ``market_timeframe`` from config, if any.
+
+    Returns ``(tf_enum, tf_label, bar_count)`` when an explicit MT5 timeframe is
+    configured (e.g. "M1"), else ``None`` so the caller uses the date-range
+    picker. "auto"/empty means no override.
+    """
+    try:
+        from tradingagents.dataflows.config import get_config
+        tf_label = str((get_config() or {}).get("market_timeframe", "auto") or "auto").upper()
+    except Exception:
+        tf_label = "AUTO"
+    if tf_label in ("", "AUTO"):
+        return None
+    import MetaTrader5 as mt5
+    tf_enum = getattr(mt5, f"TIMEFRAME_{tf_label}", None)
+    if tf_enum is None:
+        logger.warning("Unknown market_timeframe %r; falling back to auto picker", tf_label)
+        return None
+    return tf_enum, tf_label, _EXPLICIT_TF_BARS.get(tf_label, 400)
+
+
 def get_mt5_market_data(
     symbol: Annotated[str, "Symbol to fetch (e.g. XAUUSD, EURUSD)"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd"],
@@ -64,7 +95,6 @@ def get_mt5_market_data(
         raise ValueError(f"Bad date in MT5 fetch: {e}")
 
     days_range = max(1, (end - start).days)
-    timeframe, _ = _pick_timeframe(days_range)
 
     # Make sure the symbol is visible in Market Watch — MT5 won't return rates
     # for hidden symbols. Selecting is idempotent.
@@ -77,7 +107,15 @@ def get_mt5_market_data(
     except Exception as e:
         raise RuntimeError(f"MT5 symbol_select error for {sym_upper}: {e}")
 
-    rates = mt5.copy_rates_range(sym_upper, timeframe, start, end)
+    forced = _explicit_timeframe()
+    if forced is not None:
+        # Explicit intraday timeframe (e.g. M1): pull the most recent N bars
+        # ending at "now" rather than the analyst's multi-day date range.
+        timeframe, _forced_label, count = forced
+        rates = mt5.copy_rates_from_pos(sym_upper, timeframe, 0, count)
+    else:
+        timeframe, _ = _pick_timeframe(days_range)
+        rates = mt5.copy_rates_range(sym_upper, timeframe, start, end)
     if rates is None or len(rates) == 0:
         err = mt5.last_error() if hasattr(mt5, "last_error") else None
         raise RuntimeError(
@@ -106,7 +144,10 @@ def get_mt5_market_data(
         df[col] = df[col].round(5)
 
     tf_label = {
+        getattr(mt5, "TIMEFRAME_M1"):  "M1",
+        getattr(mt5, "TIMEFRAME_M5"):  "M5",
         getattr(mt5, "TIMEFRAME_M15"): "M15",
+        getattr(mt5, "TIMEFRAME_M30"): "M30",
         getattr(mt5, "TIMEFRAME_H1"):  "H1",
         getattr(mt5, "TIMEFRAME_H4"):  "H4",
         getattr(mt5, "TIMEFRAME_D1"):  "D1",

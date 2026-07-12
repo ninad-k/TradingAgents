@@ -1,26 +1,48 @@
 from __future__ import annotations
 
-from typing import Dict, List, Protocol
+from typing import Dict, List, Optional, Protocol
 
 from .types import Bar, InstrumentKind, InstrumentSpec
 
 # Forex/commodity specs. point = pip size; pip_value_per_lot = account-USD value
-# of one point per 1.0 lot. Extend by adding rows.
+# of one point per 1.0 lot. Cost fields (commission_per_lot / slippage_points)
+# model realistic broker frictions; min spread already lives in spread_points.
+# Extend by adding rows.
 _FOREX_SPECS: Dict[str, InstrumentSpec] = {
-    "XAUUSD": InstrumentSpec("XAUUSD", InstrumentKind.FOREX, 0.01, 1.0, 0.01, 100, 0.01, 30.0),
-    "EURUSD": InstrumentSpec("EURUSD", InstrumentKind.FOREX, 0.0001, 10.0, 0.01, 100, 0.01, 1.5),
-    "GBPUSD": InstrumentSpec("GBPUSD", InstrumentKind.FOREX, 0.0001, 10.0, 0.01, 100, 0.01, 2.0),
-    "USDJPY": InstrumentSpec("USDJPY", InstrumentKind.FOREX, 0.01, 6.7, 0.01, 100, 0.01, 1.5),
+    "XAUUSD": InstrumentSpec("XAUUSD", InstrumentKind.FOREX, 0.01, 1.0, 0.01, 100, 0.01, 30.0,
+                             commission_per_lot=3.5, slippage_points=5.0),
+    "EURUSD": InstrumentSpec("EURUSD", InstrumentKind.FOREX, 0.0001, 10.0, 0.01, 100, 0.01, 1.5,
+                             commission_per_lot=3.5, slippage_points=1.0),
+    "GBPUSD": InstrumentSpec("GBPUSD", InstrumentKind.FOREX, 0.0001, 10.0, 0.01, 100, 0.01, 2.0,
+                             commission_per_lot=3.5, slippage_points=1.0),
+    "USDJPY": InstrumentSpec("USDJPY", InstrumentKind.FOREX, 0.01, 6.7, 0.01, 100, 0.01, 1.5,
+                             commission_per_lot=3.5, slippage_points=1.0),
 }
 
 INSTRUMENT_SPECS = dict(_FOREX_SPECS)
 
+# Default transaction costs for the equity fallback spec. Overridable per call
+# via get_spec(..., costs=DEFAULT_CONFIG["backtest_costs"]["equity"]).
+_EQUITY_COST_DEFAULTS = {
+    "commission_rate": 0.0005,   # 5 bps of notional per fill
+    "min_commission": 1.0,       # USD floor per fill
+    "slippage_points": 2.0,      # 0.02 at point=0.01
+}
 
-def get_spec(symbol: str) -> InstrumentSpec:
-    """Return the spec for a symbol; unknown symbols are treated as equities (shares)."""
+
+def get_spec(symbol: str, costs: Optional[Dict[str, float]] = None) -> InstrumentSpec:
+    """Return the spec for a symbol; unknown symbols are treated as equities (shares).
+
+    ``costs`` optionally overrides the equity-fallback cost fields (e.g. from
+    ``DEFAULT_CONFIG["backtest_costs"]["equity"]``); forex specs carry their own.
+    """
     if symbol.upper() in _FOREX_SPECS:
         return _FOREX_SPECS[symbol.upper()]
-    return InstrumentSpec(symbol, InstrumentKind.EQUITY, 0.01, 0.0, 1, 1e9, 1, 0.0)
+    c = {**_EQUITY_COST_DEFAULTS, **(costs or {})}
+    return InstrumentSpec(symbol, InstrumentKind.EQUITY, 0.01, 0.0, 1, 1e9, 1, 0.0,
+                          commission_rate=float(c["commission_rate"]),
+                          min_commission=float(c["min_commission"]),
+                          slippage_points=float(c["slippage_points"]))
 
 
 class BarProvider(Protocol):

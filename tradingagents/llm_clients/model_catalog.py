@@ -25,11 +25,13 @@ MODEL_OPTIONS: ProviderModeOptions = {
     },
     "anthropic": {
         "quick": [
+            ("Claude Sonnet 5 - New frontier", "claude-sonnet-5"),
             ("Claude Sonnet 4.6 - Best speed and intelligence balance", "claude-sonnet-4-6"),
             ("Claude Haiku 4.5 - Fast, near-instant responses", "claude-haiku-4-5"),
             ("Claude Sonnet 4.5 - Agents and coding", "claude-sonnet-4-5"),
         ],
         "deep": [
+            ("Claude Sonnet 5 - New frontier", "claude-sonnet-5"),
             ("Claude Opus 4.6 - Most intelligent, agents and coding", "claude-opus-4-6"),
             ("Claude Opus 4.5 - Premium, max intelligence", "claude-opus-4-5"),
             ("Claude Sonnet 4.6 - Best speed and intelligence balance", "claude-sonnet-4-6"),
@@ -123,12 +125,16 @@ MODEL_OPTIONS: ProviderModeOptions = {
     # OpenRouter: fetched dynamically. Azure: any deployed model name.
     "ollama": {
         "quick": [
+            ("Qwen 2.5 1.5B (cheapest local)", "qwen2.5:1.5b"),
+            ("Qwen 2.5 3B (local)", "qwen2.5:3b"),
             ("Gemma 3 (4B, local fallback)", "gemma3:4b"),
             ("Qwen3:latest (8B, local)", "qwen3:latest"),
             ("GPT-OSS:latest (20B, local)", "gpt-oss:latest"),
             ("GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"),
         ],
         "deep": [
+            ("Qwen 2.5 1.5B (cheapest local)", "qwen2.5:1.5b"),
+            ("Qwen 2.5 3B (local)", "qwen2.5:3b"),
             ("Gemma 3 (4B, local fallback)", "gemma3:4b"),
             ("GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"),
             ("GPT-OSS:latest (20B, local)", "gpt-oss:latest"),

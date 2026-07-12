@@ -3,7 +3,10 @@
   "min_sharpe": 1.0,
   "max_drawdown_pct": -10.0,
   "min_win_rate": 0.50,
-  "min_decisions_for_review": 20,
+  "min_decisions_for_review": 5,
   "evaluation_horizon_hours": 24,
-  "review_window_days": 30
+  "review_window_days": 30,
+  "walk_forward_holdout_frac": 0.3,
+  "min_train_decisions": 5,
+  "min_holdout_decisions": 3
 }

@@ -47,8 +47,8 @@ def main(argv=None):
     load_dotenv()
     ns = parse_args(argv)
 
-    spec = get_spec(ns.ticker)
     agent_config = DEFAULT_CONFIG.copy()
+    spec = get_spec(ns.ticker, costs=agent_config.get("backtest_costs", {}).get("equity"))
     config_hash = build_config_hash(agent_config)
 
     config = BacktestConfig(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .types import InstrumentSpec, Trade, position_pnl
+from .types import InstrumentSpec, Trade, position_pnl, trade_cost
 
 
 class Portfolio:
@@ -21,11 +21,15 @@ class Portfolio:
              stop_loss=None, take_profit=None, max_holding_hours=None) -> Trade:
         if self.open_trade is not None:
             raise RuntimeError("position already open")
+        entry_cost = trade_cost(self.spec, price, volume)
         self.open_trade = Trade(
             symbol=self.spec.symbol, side=side, entry_date=date,
             entry_price=price, volume=volume, stop_loss=stop_loss,
             take_profit=take_profit, max_holding_hours=max_holding_hours,
+            entry_cost=entry_cost,
         )
+        # Entry commission is paid immediately, so equity reflects it while held.
+        self.realized_pnl -= entry_cost
         return self.open_trade
 
     def unrealized(self, current_price: float) -> float:
@@ -44,7 +48,12 @@ class Portfolio:
         t.exit_date = date
         t.exit_price = price
         t.exit_reason = reason
-        t.pnl = position_pnl(self.spec, t.side, t.entry_price, price, t.volume)
-        self.realized_pnl += t.pnl
+        gross = position_pnl(self.spec, t.side, t.entry_price, price, t.volume)
+        exit_cost = trade_cost(self.spec, price, t.volume)
+        t.gross_pnl = gross
+        t.cost = t.entry_cost + exit_cost
+        t.pnl = gross - t.cost                      # net of round-trip commission
+        # entry_cost was already deducted at open(); here add gross less exit cost.
+        self.realized_pnl += gross - exit_cost
         self.open_trade = None
         return t

@@ -39,6 +39,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_insider_transactions,
     get_global_news
 )
+from tradingagents.agents.utils.macro_context_tool import get_macro_context
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
@@ -238,6 +239,7 @@ class TradingAgentsGraph:
             "fundamentals": ToolNode(
                 [
                     # Fundamental analysis tools
+                    get_macro_context,
                     get_fundamentals,
                     get_balance_sheet,
                     get_cashflow,

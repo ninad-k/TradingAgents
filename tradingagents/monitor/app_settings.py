@@ -30,9 +30,13 @@ _MUTABLE_KEYS = {
     "analysis_timeout_seconds",
     "auto_trade_enabled",
     "auto_trade_paper_only",
+    "mock_mode_enabled",
     "trade_comment",
     "max_risk_per_trade_percent",
     "max_risk_per_trade_usd",
+    "market_timeframe",
+    "llm_enabled",
+    "token_budget_max",
 }
 
 

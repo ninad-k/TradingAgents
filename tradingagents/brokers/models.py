@@ -111,6 +111,7 @@ class SymbolInfo(BaseModel):
 
     # Trading hours
     trade_mode: Optional[str] = Field(default=None, description="Trade mode (e.g., FULL, CLOSEONLY)")
+    atr_points: Optional[float] = Field(default=None, description="Recent ATR expressed in points")
 
 
 class Position(BaseModel):

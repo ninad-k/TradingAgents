@@ -19,15 +19,42 @@ logger = logging.getLogger(__name__)
 
 
 def get_close_at(symbol: str, ts: datetime) -> Optional[float]:
-    """Return the close price at-or-just-before ``ts``, or None on failure."""
+    """Return the close price at-or-just-before ``ts``, or None on failure.
+
+    Primary sources: TvDatafeed (forex/commodity/crypto) or yfinance (equities).
+    If both fail, falls back to the MT5 broker's live bid price so that
+    "evaluate now" can compute unrealized PnL even when data feeds are unavailable.
+    """
     sym = symbol.upper().strip()
+    price = None
     try:
         if is_tradingview_symbol(sym):
-            return _tv_close_at(sym, ts)
-        return _yf_close_at(sym, ts)
+            price = _tv_close_at(sym, ts)
+        else:
+            price = _yf_close_at(sym, ts)
     except Exception as e:
         logger.warning("Price lookup failed for %s @ %s: %s", sym, ts, e)
-        return None
+
+    if price is not None:
+        return price
+
+    # Fallback: ask the MT5 broker for the current live bid price.
+    # This is good enough for "unrealized PnL if closed now" calculations.
+    return _broker_price_fallback(sym)
+
+
+def _broker_price_fallback(symbol: str) -> Optional[float]:
+    """Return the broker's current bid price for ``symbol``, or None."""
+    try:
+        from tradingagents.brokers.mt5_connector import get_shared_mt5_connector
+        connector = get_shared_mt5_connector()
+        info = connector.get_symbol_info(symbol)
+        if info and info.bid:
+            logger.debug("Price fallback via broker for %s: %.5f", symbol, info.bid)
+            return float(info.bid)
+    except Exception as e:
+        logger.debug("Broker price fallback failed for %s: %s", symbol, e)
+    return None
 
 
 def _tv_close_at(symbol: str, ts: datetime) -> Optional[float]:

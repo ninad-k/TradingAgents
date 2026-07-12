@@ -8,8 +8,9 @@ load_dotenv(override=True)
 
 # Create a custom config
 config = DEFAULT_CONFIG.copy()
-config["deep_think_llm"] = "gpt-5.4-mini"  # Use a different model
-config["quick_think_llm"] = "gpt-5.4-mini"  # Use a different model
+config["llm_provider"] = "ollama"
+config["deep_think_llm"] = "qwen2.5:1.5b"
+config["quick_think_llm"] = "qwen2.5:1.5b"
 config["max_debate_rounds"] = 1  # Increase debate rounds
 
 # Configure data vendors (default uses yfinance, no extra API keys needed)

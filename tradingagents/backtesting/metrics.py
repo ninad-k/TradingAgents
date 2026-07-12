@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from .types import PerformanceMetrics, PortfolioValuePoint
+from .types import PerformanceMetrics, PortfolioValuePoint, Trade
 
 
 class PerformanceMetricsCalculator:
@@ -12,7 +12,15 @@ class PerformanceMetricsCalculator:
         self.annual_trading_days = annual_trading_days
         self.annual_rf_rate = annual_rf_rate
 
-    def compute_metrics(self, values: Sequence[PortfolioValuePoint]) -> PerformanceMetrics:
+    def compute_metrics(
+        self,
+        values: Sequence[PortfolioValuePoint],
+        trades: Sequence[Trade] = (),
+        *,
+        min_acceptance_trades: int = 300,
+        min_profit_factor: float = 1.2,
+        max_acceptable_drawdown: float = -10.0,
+    ) -> PerformanceMetrics:
         import numpy as np
         import pandas as pd
 
@@ -50,6 +58,24 @@ class PerformanceMetricsCalculator:
         max_drawdown = float(min_dd * 100.0)
         max_drawdown_date = drawdown.idxmin() if min_dd < 0 else None
 
+        realized = [float(t.pnl) for t in trades if t.pnl is not None]
+        wins = [p for p in realized if p > 0]
+        losses = [p for p in realized if p < 0]
+        gross_wins = sum(wins)
+        gross_losses = abs(sum(losses))
+        profit_factor = (gross_wins / gross_losses if gross_losses > 0 else (float("inf") if gross_wins > 0 else None))
+        expectancy = (sum(realized) / len(realized)) if realized else None
+        win_rate = (len(wins) / len(realized) * 100.0) if realized else None
+        reasons = []
+        if len(realized) < min_acceptance_trades:
+            reasons.append(f"only {len(realized)} trades; need {min_acceptance_trades}")
+        if profit_factor is None or profit_factor < min_profit_factor:
+            reasons.append(f"profit factor below {min_profit_factor:.2f}")
+        if expectancy is None or expectancy <= 0:
+            reasons.append("expectancy is not positive after costs")
+        if max_drawdown < max_acceptable_drawdown:
+            reasons.append(f"drawdown {max_drawdown:.2f}% exceeds {max_acceptable_drawdown:.2f}% limit")
+
         return PerformanceMetrics(
             sharpe_ratio=sharpe,
             sortino_ratio=sortino,
@@ -57,4 +83,11 @@ class PerformanceMetricsCalculator:
             max_drawdown_date=max_drawdown_date,
             total_return_pct=total_return_pct,
             ending_value=ending_value,
+            profit_factor=profit_factor,
+            expectancy=expectancy,
+            win_rate=win_rate,
+            trade_count=len(realized),
+            total_cost=sum(float(t.cost or 0.0) for t in trades),
+            acceptance_passed=not reasons,
+            acceptance_reasons=reasons,
         )

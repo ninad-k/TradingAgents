@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { WatchlistEntry } from '../types'
-import { triggerAnalysis, getAnalysisJob, addToWatchlist, addManyToWatchlist, removeFromWatchlist } from '../api'
+import { triggerAnalysis, addToWatchlist, addManyToWatchlist, removeFromWatchlist } from '../api'
 import { useBrokerSymbols } from '../useBrokerSymbols'
 
 /** How long a completed/failed status sticks around before we hide it. */
@@ -24,8 +24,6 @@ type ActionStatus = {
   message: string
   progressPercent?: number
 }
-
-const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
 
 function SignalBadge({ signal }: { signal: string | null }) {
   if (!signal || signal === 'UNKNOWN') {
@@ -175,34 +173,17 @@ export function WatchlistPanel({ entries, onRefresh }: WatchlistPanelProps) {
         }))
 
     try {
-      const triggered = await triggerAnalysis(symbol, executeTrade, force)
-      onRefresh()
-
-      const maxAttempts = Math.ceil((triggered.job.timeout_seconds + 10) / 2)
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        await sleep(2000)
-        const job = await getAnalysisJob(triggered.job_id)
-        const running = job.status === 'queued' || job.status === 'running'
-        const failed = job.status === 'failed' || job.status === 'timeout'
-        setActionStatus(current => ({
-          ...current,
-          [symbol]: {
-            state: running ? 'running' : failed ? 'error' : 'success',
-            message: job.message,
-            progressPercent: job.progress_percent,
-            // Stamp terminal transitions so the TTL janitor can drop them later.
-            completedAt: running ? undefined : Date.now(),
-          },
-        }))
-        onRefresh()
-        if (!running) return
-      }
-
+      const completed = await triggerAnalysis(symbol, executeTrade, force)
+      const result = completed.result
+      const execution = result?.execution
+      const executionText = execution?.ticket
+        ? ` · ticket #${execution.ticket}`
+        : execution?.reason ? ` · ${execution.reason}` : ''
       setActionStatus(current => ({
         ...current,
         [symbol]: {
-          state: 'error',
-          message: 'Job status polling expired',
+          state: execution?.status === 'failed' ? 'error' : 'success',
+          message: `${result?.signal ?? 'Completed'}${executionText}`,
           progressPercent: 100,
           completedAt: Date.now(),
         },
@@ -223,6 +204,8 @@ export function WatchlistPanel({ entries, onRefresh }: WatchlistPanelProps) {
       setTrading(null)
     }
   }
+
+  // Mock BUY/SELL execution is intentionally unavailable in the production UI.
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
@@ -387,22 +370,13 @@ export function WatchlistPanel({ entries, onRefresh }: WatchlistPanelProps) {
                       <div>
                         <div style={{ display: 'flex', gap: 6 }}>
                           <button
-                            onClick={() => handleTrigger(entry.symbol)}
-                            disabled={triggering === entry.symbol || trading === entry.symbol || jobRunning}
-                            title="Run analysis now"
-                            className="btn"
-                            style={{ padding: '5px 12px', fontSize: '0.76rem' }}
-                          >
-                            {triggering === entry.symbol ? '...' : '> Run'}
-                          </button>
-                          <button
                             onClick={() => handleTrigger(entry.symbol, true)}
                             disabled={triggering === entry.symbol || trading === entry.symbol || jobRunning}
-                            title="Run analysis, then place an order only if the result is BUY or SELL and trading safety settings allow it"
+                            title="Run the local Codex strategy and execute only a safety-qualified BUY or SELL"
                             className="btn btn-trade"
                             style={{ padding: '5px 12px', fontSize: '0.76rem' }}
                           >
-                            {trading === entry.symbol ? '...' : 'Trade'}
+                            {trading === entry.symbol ? '...' : '> Run & Trade'}
                           </button>
                           <button
                             onClick={() => handleRemove(entry.symbol)}
@@ -413,6 +387,7 @@ export function WatchlistPanel({ entries, onRefresh }: WatchlistPanelProps) {
                             x
                           </button>
                         </div>
+                        {/* Mock BUY/SELL controls intentionally hidden. */}
                         <div
                           title={statusMessage || undefined}
                           style={{

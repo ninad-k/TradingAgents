@@ -48,6 +48,8 @@ class OrderGenerator:
         max_risk_usd: Optional[float] = None,
         trade_comment: Optional[str] = None,
         fixed_lot_size: Optional[float] = None,
+        max_position_size: Optional[float] = None,
+        atr_stop_multiplier: float = 1.25,
     ):
         """
         Initialize OrderGenerator.
@@ -68,6 +70,8 @@ class OrderGenerator:
         self.max_risk_usd = max_risk_usd
         self.trade_comment = trade_comment or os.getenv("TRADINGAGENTS_TRADE_COMMENT", "TradingAgent2.0")
         self.fixed_lot_size = fixed_lot_size if (fixed_lot_size and fixed_lot_size > 0) else None
+        self.max_position_size = max_position_size if max_position_size and max_position_size > 0 else None
+        self.atr_stop_multiplier = max(0.5, float(atr_stop_multiplier))
         if self.fixed_lot_size:
             logger.info("OrderGenerator: fixed lot override = %.3f lots/trade", self.fixed_lot_size)
 
@@ -120,7 +124,8 @@ class OrderGenerator:
         # Extract prices from decision
         entry_price = self._get_entry_price(decision, symbol_info, action)
         stop_loss = self._get_stop_loss(decision, symbol_info, action)
-        take_profit = decision.price_target
+        # Use LLM-provided target if given, otherwise compute 2:1 R:R from SL
+        take_profit = decision.price_target or self._get_take_profit(action, entry_price, stop_loss)
 
         # Calculate position size
         volume = self._calculate_volume(
@@ -209,12 +214,36 @@ class OrderGenerator:
         # For now, calculate a 2x spread stop loss
         # In production, would parse from decision
         spread_pips = symbol_info.spread
-        stop_distance = max(spread_pips * 3, 20)  # At least 20 pips from entry
+        atr_distance = (symbol_info.atr_points or 0) * self.atr_stop_multiplier
+        stop_distance = max(spread_pips * 3, atr_distance, 20)
 
         if action == OrderAction.BUY:
             return symbol_info.bid - (stop_distance * symbol_info.point)
         else:
             return symbol_info.ask + (stop_distance * symbol_info.point)
+
+    def _get_take_profit(
+        self,
+        action: OrderAction,
+        entry_price: Optional[float],
+        stop_loss: Optional[float],
+        rr_ratio: float = 2.0,
+    ) -> Optional[float]:
+        """Return a take-profit price at rr_ratio:1 reward-to-risk from entry.
+
+        Uses the SL distance as the risk unit. For BUY: TP = entry + rr*SL_distance.
+        For SELL: TP = entry - rr*SL_distance. Returns None when SL is unavailable.
+        """
+        if entry_price is None or stop_loss is None:
+            return None
+        sl_distance = abs(entry_price - stop_loss)
+        if sl_distance == 0:
+            return None
+        tp_distance = sl_distance * rr_ratio
+        if action == OrderAction.BUY:
+            return round(entry_price + tp_distance, 5)
+        else:
+            return round(entry_price - tp_distance, 5)
 
     def _calculate_volume(
         self,
@@ -243,7 +272,8 @@ class OrderGenerator:
         # volume_min/volume_max/volume_step so we always send a legal request.
         if self.fixed_lot_size:
             volume = self.fixed_lot_size
-            volume = max(symbol_info.min_volume, min(volume, symbol_info.max_volume))
+            ceiling = min(symbol_info.max_volume, self.max_position_size or symbol_info.max_volume)
+            volume = max(symbol_info.min_volume, min(volume, ceiling))
             volume = round(volume / symbol_info.volume_step) * symbol_info.volume_step
             return volume
 
@@ -276,7 +306,8 @@ class OrderGenerator:
                 volume = max_risk / (risk_pips * pip_value)
 
         # Respect symbol limits
-        volume = max(symbol_info.min_volume, min(volume, symbol_info.max_volume))
+        ceiling = min(symbol_info.max_volume, self.max_position_size or symbol_info.max_volume)
+        volume = max(symbol_info.min_volume, min(volume, ceiling))
 
         # Round to nearest volume step
         volume = round(volume / symbol_info.volume_step) * symbol_info.volume_step

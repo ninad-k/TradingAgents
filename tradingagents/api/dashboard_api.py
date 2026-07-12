@@ -6,12 +6,13 @@ from typing import List, Dict, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from pydantic import BaseModel, Field
 import asyncio
 import json
 
 from tradingagents.api.models import (
-    DashboardStatus, Trade, Position, AccountStatus, TradeDirection, TradeStatus
+    DashboardStatus, Trade, Position, AccountStatus, TradeDirection, TradeStatus, TokenUsage
 )
 from tradingagents.brokers.analytics import ExecutionAnalytics
 from tradingagents.brokers.mt5_connector import get_shared_mt5_connector
@@ -21,6 +22,38 @@ from tradingagents.monitor.watchlist import watchlist
 from tradingagents.monitor.scheduler import scheduler
 
 logger = logging.getLogger(__name__)
+
+
+class CodexAnalysisSubmission(BaseModel):
+    """A completed analysis produced by the local Codex desktop task."""
+
+    symbol: str
+    signal: str
+    decision_text: str
+    components: Dict[str, str] = Field(default_factory=dict)
+    execute_trade: bool = True
+
+
+def _build_token_usage(config: Dict) -> TokenUsage:
+    """Assemble the dashboard token-usage block from the shared tracker + settings."""
+    from tradingagents.monitor.token_usage import get_token_tracker
+    from tradingagents.monitor import app_settings
+
+    usage = get_token_tracker().get_usage()
+    try:
+        settings = app_settings.load_settings()
+    except Exception:
+        settings = {}
+    budget = int(settings.get("token_budget_max", config.get("token_budget_max", 0)) or 0)
+    enabled = bool(settings.get("llm_enabled", config.get("llm_enabled", True)))
+    return TokenUsage(
+        tokens_in=usage["tokens_in"],
+        tokens_out=usage["tokens_out"],
+        total=usage["total"],
+        llm_calls=usage["llm_calls"],
+        budget_max=budget,
+        llm_enabled=enabled,
+    )
 
 
 class DashboardManager:
@@ -104,6 +137,7 @@ class DashboardManager:
             recent_trades=trades,
             total_positions=len(positions),
             total_closed_trades=len(closed_trades),
+            token_usage=_build_token_usage(config),
         )
 
     def _get_dashboard_positions(self) -> List[Position]:
@@ -151,6 +185,8 @@ class DashboardManager:
                     comment=trade.comment,
                 )
             )
+        # Newest first so callers can take [:N] and get the most recent N trades.
+        trades.sort(key=lambda t: t.entry_time or datetime.min, reverse=True)
         return trades
 
     @staticmethod
@@ -204,6 +240,30 @@ def _in_process_scheduler_enabled(config: Dict) -> bool:
     return bool(config.get("watchlist_enabled", True))
 
 
+async def _run_local_codex_schedule(interval_seconds: int, symbols: List[str]) -> None:
+    """Trigger the localhost Codex strategy periodically without Anthropic."""
+    from urllib.request import Request as UrlRequest, urlopen
+
+    async def trigger(symbol: str) -> None:
+        def post() -> None:
+            url = f"http://127.0.0.1:8000/api/codex/run/{symbol}?execute_trade=true"
+            request = UrlRequest(url, data=b"", method="POST")
+            with urlopen(request, timeout=120) as response:
+                response.read()
+        await asyncio.to_thread(post)
+
+    while True:
+        await asyncio.sleep(interval_seconds)
+        for symbol in symbols:
+            try:
+                await trigger(symbol)
+                logger.info("Scheduled Codex strategy completed for %s", symbol)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Scheduled Codex strategy failed for %s", symbol)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start/stop the watchlist scheduler alongside the API."""
@@ -232,8 +292,22 @@ async def lifespan(app: FastAPI):
     from tradingagents.monitor.log_buffer import install_log_buffer
     install_log_buffer()
 
+    codex_task = None
+    codex_interval = int(os.getenv("CODEX_STRATEGY_INTERVAL_SECONDS", "0") or 0)
+    codex_symbols = [s.strip().upper() for s in os.getenv("CODEX_STRATEGY_SYMBOLS", "BTCUSD").split(",") if s.strip()]
+    if codex_interval > 0 and codex_symbols:
+        codex_task = asyncio.create_task(_run_local_codex_schedule(codex_interval, codex_symbols))
+        logger.info("Local Codex strategy scheduled every %ss for %s", codex_interval, ", ".join(codex_symbols))
+
     logger.info("Trading Dashboard API started")
     yield
+
+    if codex_task is not None:
+        codex_task.cancel()
+        try:
+            await codex_task
+        except asyncio.CancelledError:
+            pass
 
     live_progress.stop_watchdog()
     scheduler.stop()
@@ -348,8 +422,14 @@ async def add_to_watchlist(
 ) -> Dict:
     """Add a symbol to the watchlist."""
     if interval_minutes is not None:
-        interval_hours = 0 if interval_minutes <= 1 else max(1, round(interval_minutes / 60))
-    entry = watchlist.add(symbol.upper(), interval_hours, include_news)
+        interval_minutes = max(1, interval_minutes)
+        interval_hours = 0 if interval_minutes < 60 else round(interval_minutes / 60)
+    entry = watchlist.add(
+        symbol.upper(),
+        interval_hours,
+        include_news,
+        interval_minutes=interval_minutes,
+    )
     return {"added": True, "symbol": entry.symbol, "mode": entry.mode}
 
 
@@ -395,6 +475,147 @@ async def trigger_analysis(
         "job": job,
         "message": "Analysis running in background",
     }
+
+
+@app.post("/api/codex/analysis")
+async def submit_codex_analysis(payload: CodexAnalysisSubmission, request: Request) -> Dict:
+    """Record a local Codex analysis trace and optionally execute its verdict.
+
+    This bridge deliberately accepts requests only from localhost.  It lets the
+    Codex desktop task drive the existing Flow, ledger, risk-manager, and demo
+    broker pipeline without pretending that the desktop session is an API key.
+    """
+    if request.client is None or request.client.host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(status_code=403, detail="Codex bridge is localhost-only")
+
+    from tradingagents.monitor import store
+    from tradingagents.monitor.live_progress import live_progress, COMPONENT_KEYS
+    from tradingagents.monitor.scheduler import AnalysisResult, _maybe_execute_trade, _record_ledger
+
+    symbol = payload.symbol.strip().upper()
+    signal = payload.signal.strip().upper()
+    if not symbol or signal not in {"BUY", "SELL", "HOLD"}:
+        raise HTTPException(status_code=422, detail="symbol and BUY/SELL/HOLD signal are required")
+    if watchlist.get(symbol) is None:
+        raise HTTPException(status_code=404, detail=f"{symbol} not in watchlist")
+
+    unknown = set(payload.components) - set(COMPONENT_KEYS)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown Flow components: {sorted(unknown)}")
+
+    run_id = live_progress.start_run(symbol, list(COMPONENT_KEYS))
+    for key in COMPONENT_KEYS:
+        content = payload.components.get(key, "No separate output supplied by Codex.")
+        live_progress.set_stage(run_id, key.replace("_", " ").title())
+        live_progress.mark_component(run_id, key, "running")
+        live_progress.mark_component(run_id, key, "done", content)
+
+    config = get_config()
+    execution = _maybe_execute_trade(
+        symbol=symbol,
+        decision_text=payload.decision_text,
+        signal=signal,
+        decision_date=datetime.now().strftime("%Y-%m-%d"),
+        config=config,
+        execute_trade=payload.execute_trade,
+        allow_auto_trade_config=False,
+    )
+    result = AnalysisResult(
+        symbol=symbol,
+        success=True,
+        signal=signal,
+        decision_text=payload.decision_text,
+        execution=execution,
+    )
+    watchlist.update_result(symbol, payload.decision_text, signal)
+    store.save_result(result)
+    decision_id = _record_ledger(result)
+    trace = {
+        "symbol": symbol,
+        "signal": signal,
+        "success": True,
+        "timestamp": result.timestamp.isoformat(),
+        "components": payload.components,
+        "execution": execution,
+        "source": "codex-desktop",
+    }
+    if decision_id is not None:
+        store.save_analysis_trace(decision_id, symbol, trace, result.timestamp)
+
+    live_progress.finish_run(run_id, "success", signal=signal)
+    dashboard_manager.record_analysis_event("analysis_complete", result.to_dict())
+    return {
+        "accepted": True,
+        "source": "codex-desktop",
+        "run_id": run_id,
+        "decision_id": decision_id,
+        "result": result.to_dict(),
+    }
+
+
+@app.post("/api/codex/run/{symbol}")
+async def run_codex_strategy(symbol: str, request: Request, execute_trade: bool = False) -> Dict:
+    """Run the credential-free local Codex strategy used by dashboard buttons."""
+    from dataclasses import replace
+    from tradingagents.brokers.trade_guard import load_mt5_setup, qualify_setup
+
+    symbol = symbol.strip().upper()
+    if watchlist.get(symbol) is None:
+        raise HTTPException(status_code=404, detail=f"{symbol} not in watchlist")
+    config = get_config()
+    try:
+        buy = load_mt5_setup(symbol, "BUY", str(config.get("market_timeframe", "M1") or "M1"))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Broker setup analysis failed: {exc}") from exc
+    sell = replace(buy, signal="SELL")
+    gate_args = {
+        "max_spread_atr_ratio": float(config.get("max_spread_atr_ratio", 0.40)),
+        "min_volume_ratio": float(config.get("min_volume_ratio", 0.20)),
+    }
+    buy_ok, buy_reason = qualify_setup(buy, **gate_args)
+    sell_ok, sell_reason = qualify_setup(sell, **gate_args)
+    signal = "BUY" if buy_ok else "SELL" if sell_ok else "HOLD"
+    chosen_reason = buy_reason if buy_ok else sell_reason if sell_ok else f"BUY: {buy_reason}; SELL: {sell_reason}"
+    target = buy.price + 2 * buy.atr if signal == "BUY" else buy.price - 2 * buy.atr if signal == "SELL" else None
+    trend = f"EMA9 {buy.ema_fast:.2f}, EMA21 {buy.ema_slow:.2f}, EMA50 {buy.ema_trend:.2f}"
+    market = (
+        f"{symbol} {config.get('market_timeframe', 'M1')}: price {buy.price:.2f}; {trend}; "
+        f"RSI14 {buy.rsi:.1f}; ATR {buy.atr:.2f}; spread {buy.spread:.2f}; "
+        f"volume {buy.volume_ratio:.2f}x average. Gate: {chosen_reason}."
+    )
+    components = {
+        "market_analyst": market,
+        "sentiment_analyst": "Short-horizon sentiment is inferred conservatively from broker price participation; no unsupported social signal overrides the gate.",
+        "news_analyst": "The local dashboard run is credential-free and does not invent a news catalyst; broker-native setup quality controls execution.",
+        "fundamentals_analyst": "For this M1 crypto decision, structural fundamentals are secondary to liquidity, volatility, and transaction costs.",
+        "bull_researcher": f"BUY qualification: {buy_reason}.",
+        "bear_researcher": f"SELL qualification: {sell_reason}.",
+        "research_manager": f"Deterministic research verdict: {signal}. {chosen_reason}.",
+        "trader": f"{signal}. " + (f"Target approximately {target:.2f}; risk engine controls size and stop." if target else "No order while qualification fails."),
+        "aggressive_risk": "Directional opportunity may exist, but it cannot bypass liquidity, spread, or exposure controls.",
+        "neutral_risk": f"Apply 0.1% risk, 0.5-lot cap, ATR stop, and 4x reward/cost gate. Current verdict: {signal}.",
+        "conservative_risk": "Prefer HOLD whenever trend, momentum, volume, freshness, and cost checks are not simultaneously satisfied.",
+        "portfolio_manager": f"Final {signal}. {chosen_reason}.",
+    }
+    decision = (
+        f"**Rating**: {signal.title()}\n\n"
+        f"**Executive Summary**: {signal}. {chosen_reason}. "
+        "Execution remains subject to all portfolio and broker risk controls.\n\n"
+        f"**Investment Thesis**: {market}\n\n"
+        + (f"**Price Target**: {target:.2f}\n\n" if target is not None else "")
+        + "**Time Horizon**: 15-60 minutes\n\n"
+        + f"**Confidence**: {0.65 if signal != 'HOLD' else 0.85:.2f}"
+    )
+    return await submit_codex_analysis(
+        CodexAnalysisSubmission(
+            symbol=symbol,
+            signal=signal,
+            decision_text=decision,
+            components=components,
+            execute_trade=bool(execute_trade),
+        ),
+        request,
+    )
 
 
 @app.get("/api/jobs/{job_id}")
@@ -466,6 +687,181 @@ async def clear_stuck_runs() -> Dict[str, int]:
     return {"cleared": cleared}
 
 
+_MOCK_PROPOSAL_TEMPLATES = [
+    {
+        "key": "min_confidence",
+        "old": 0.60, "new": 0.65,
+        "rationale": "Recent {signal} signals under 0.65 confidence underperformed the cohort by ~0.8 % mean PnL. Raising the gate should improve hit-rate without materially reducing trade frequency.",
+    },
+    {
+        "key": "hold_horizon_hours",
+        "old": 24, "new": 36,
+        "rationale": "Median time-to-target across the last 10 mock trades on {symbol} was 31h. Extending the horizon to 36h captures more wins before forced evaluation.",
+    },
+    {
+        "key": "max_position_size_pct",
+        "old": 1.0, "new": 1.25,
+        "rationale": "Sharpe ratio over the window (1.42) exceeds the goals target — modest size up is justified to convert edge to absolute return.",
+    },
+    {
+        "key": "stop_loss_pct",
+        "old": 1.5, "new": 1.2,
+        "rationale": "Tightening the stop from 1.5 % to 1.2 % would have reduced max drawdown by ~1.8 % over the window with only a small drop in win-rate (61 → 58 %).",
+    },
+    {
+        "key": "take_profit_pct",
+        "old": 3.0, "new": 2.4,
+        "rationale": "Most winning {signal} trades reversed before reaching the 3.0 % target. Tightening TP to 2.4 % locks in profit more reliably.",
+    },
+    {
+        "key": "sentiment_weight",
+        "old": 0.25, "new": 0.35,
+        "rationale": "Sentiment signal correlated strongly with PnL outcomes ({symbol}: +0.42). Increasing the weight should improve overall accuracy.",
+    },
+]
+
+
+def _drop_mock_proposal(symbol: str, signal: str) -> None:
+    """Insert a plausible-looking parameter proposal so the Proposals tab populates."""
+    import random
+    from tradingagents.monitor import store, learning_config
+    try:
+        template = random.choice(_MOCK_PROPOSAL_TEMPLATES)
+        params = learning_config.load_learned_params()
+        new_params = dict(params)
+        new_params[template["key"]] = template["new"]
+        rationale = template["rationale"].format(signal=signal, symbol=symbol)
+        store.record_params_proposal(
+            params=new_params,
+            diff={template["key"]: {"from": template["old"], "to": template["new"]}},
+            rationale=f"[mock] {rationale}",
+            applied=False,
+        )
+    except Exception as exc:
+        logger.warning("mock-execute: could not record mock proposal: %s", exc)
+
+
+def _fetch_broker_price(symbol: str, signal: str) -> Optional[float]:
+    """Return the broker's current bid/ask price for the symbol (signal-aware)."""
+    try:
+        info = dashboard_manager.connector.get_symbol_info(symbol)
+        if info:
+            return float(info.ask if signal == "BUY" else info.bid)
+    except Exception as exc:
+        logger.debug("Broker price lookup failed for %s: %s", symbol, exc)
+    return None
+
+
+@app.post("/api/watchlist/{symbol}/mock-execute")
+async def mock_execute_trade(symbol: str, signal: str = "BUY") -> Dict:
+    """Skip LLM analysis and send a mock BUY/SELL signal through the full pipeline.
+
+    Animates all 12 components over a random 20–30 s window in a background
+    thread, fires the broker execution, records the decision, force-evaluates
+    the outcome with real broker prices (so EXIT/PnL populate immediately),
+    and drops a mock parameter proposal into the Proposals tab.
+    """
+    signal = signal.upper()
+    if signal not in {"BUY", "SELL"}:
+        raise HTTPException(status_code=400, detail="signal must be BUY or SELL")
+    entry = watchlist.get(symbol.upper())
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"{symbol} not in watchlist. Add it first.")
+
+    config = get_config()
+
+    from tradingagents.monitor.live_progress import live_progress, COMPONENT_KEYS
+    from tradingagents.monitor.scheduler import _maybe_execute_trade, simulate_mock_pipeline
+    from tradingagents.monitor import store, learning_config
+    import threading
+    import random
+    from datetime import datetime
+
+    mock_text = (
+        f"**Rating**: {signal}\n"
+        f"**Confidence**: 0.90\n\n"
+        f"Mock execution test — LLM analysis bypassed to exercise the broker execution path."
+    )
+
+    # All 12 components applicable so the full flow diagram lights up — never SKIPPED.
+    run_id = live_progress.start_run(symbol.upper(), list(COMPONENT_KEYS))
+
+    def _run_in_background() -> None:
+        sym = symbol.upper()
+        try:
+            # Animate the full 12-stage pipeline for 20–30 seconds with variant content.
+            simulate_mock_pipeline(run_id, signal, sym, mock_text)
+            live_progress.set_stage(run_id, f"Mock {signal} — executing")
+
+            result = _maybe_execute_trade(
+                symbol=sym,
+                decision_text=mock_text,
+                signal=signal,
+                decision_date=datetime.now().strftime("%Y-%m-%d"),
+                config=config,
+                execute_trade=True,
+                allow_auto_trade_config=False,
+            )
+
+            watchlist.update_result(sym, mock_text, signal)
+
+            execution_ok = result and result.get("status") in ("EXECUTED", "filled", "submitted")
+            decision_id = None
+            try:
+                params = learning_config.load_learned_params()
+                horizon = int(params.get("hold_horizon_hours", 24) or 24)
+                decision_id = store.record_decision(
+                    symbol=sym,
+                    signal=signal,
+                    decision_text=mock_text,
+                    success=execution_ok,
+                    horizon_hours=horizon,
+                    error=None if execution_ok else (result or {}).get("reason") or (result or {}).get("message"),
+                )
+
+                # Force-populate outcome with real broker prices so the Decisions
+                # ledger shows entry/exit/PnL immediately rather than "price unavailable".
+                if decision_id:
+                    entry_price = (result or {}).get("execution_price") or _fetch_broker_price(sym, signal)
+                    exit_price = _fetch_broker_price(sym, "SELL" if signal == "BUY" else "BUY")
+                    if entry_price and exit_price:
+                        # Add a small ±0.3 % jitter to the exit so PnL is non-trivial in mock runs.
+                        jitter = random.uniform(-0.003, 0.003)
+                        exit_price = exit_price * (1.0 + jitter)
+                        sign = 1.0 if signal == "BUY" else -1.0
+                        pnl_pct = ((exit_price - entry_price) / entry_price) * sign * 100.0
+                        store.save_outcome(
+                            decision_id=decision_id,
+                            entry_price=float(entry_price),
+                            exit_price=float(exit_price),
+                            pnl_pct=float(pnl_pct),
+                            horizon_hours=horizon,
+                            error=None,
+                        )
+                    elif entry_price:
+                        store.save_outcome(
+                            decision_id=decision_id,
+                            entry_price=float(entry_price),
+                            exit_price=None,
+                            pnl_pct=None,
+                            horizon_hours=horizon,
+                        )
+            except Exception as exc:
+                logger.warning("mock-execute: could not record decision/outcome: %s", exc)
+
+            # Drop a mock proposal so the Proposals tab has something to show.
+            _drop_mock_proposal(sym, signal)
+
+            live_progress.finish_run(run_id, "success", signal=signal)
+        except Exception as exc:
+            logger.error("mock-execute background thread failed: %s", exc, exc_info=True)
+            live_progress.finish_run(run_id, "error", error=str(exc))
+
+    threading.Thread(target=_run_in_background, daemon=True, name=f"mock-execute-{symbol}").start()
+
+    return {"symbol": symbol.upper(), "signal": signal, "run_id": run_id}
+
+
 @app.get("/api/analysis-flow")
 async def get_analysis_flow(limit: int = 50, symbol: Optional[str] = None) -> List[Dict]:
     """Return recent decision flows with component-level traces when available.
@@ -519,6 +915,78 @@ async def get_analysis_flow_detail(decision_id: int) -> Dict:
     if not trace:
         raise HTTPException(status_code=404, detail=f"No trace found for decision {decision_id}")
     return trace
+
+
+@app.get("/api/analysis-flow/{decision_id}/report")
+async def get_analysis_flow_report(decision_id: int, format: str = "md"):
+    """Render a management-ready report for one decision's analysis flow.
+
+    Regenerates from the stored trace on demand so older runs work too. Returns
+    Markdown as an attachment for download.
+    """
+    from fastapi.responses import Response
+    from tradingagents.monitor import store
+    from tradingagents.monitor.flow_report import render_flow_report
+
+    trace = store.get_analysis_trace(decision_id)
+    if not trace:
+        # Legacy decisions predate component-trace capture — fall back to a
+        # minimal trace built from the decision row so the report still renders.
+        flow = next(
+            (f for f in store.recent_analysis_flows(limit=500) if f.get("id") == decision_id),
+            None,
+        )
+        if not flow:
+            raise HTTPException(status_code=404, detail=f"No decision found for id {decision_id}")
+        trace = {
+            "symbol": flow.get("symbol", "?"),
+            "signal": flow.get("signal", "?"),
+            "success": flow.get("success", False),
+            "timestamp": flow.get("decided_at", ""),
+            "components": {"portfolio_manager": flow.get("decision_text") or ""},
+            "debates": {"research": "", "risk": ""},
+            "execution": None,
+        }
+
+    markdown = render_flow_report(
+        trace,
+        decision_id=decision_id,
+        confidence=None,
+        trading_mode=str(get_config().get("trading_mode", "")) or None,
+    )
+    symbol = str(trace.get("symbol", "flow")).upper()
+    filename = f"flow_report_{symbol}_{decision_id}.md"
+    return Response(
+        content=markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/reports/summary")
+async def get_reports_summary() -> Dict:
+    """Return the rolling management summary (one row per decision)."""
+    from tradingagents.monitor.flow_report import report_dir
+
+    path = report_dir(get_config()) / "management_summary.md"
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    return {"path": str(path), "content": content}
+
+
+# ─── Token usage / Stop-Sonnet kill switch ──────────────────────────────────
+
+@app.get("/api/token-usage")
+async def get_token_usage() -> TokenUsage:
+    """Current LLM token usage + kill-switch state."""
+    return _build_token_usage(get_config())
+
+
+@app.post("/api/token-usage/reset")
+async def reset_token_usage() -> TokenUsage:
+    """Zero the running token counter."""
+    from tradingagents.monitor.token_usage import get_token_tracker
+    get_token_tracker().reset()
+    return _build_token_usage(get_config())
 
 
 # ─── Market Intel ──────────────────────────────────────────────────────────
@@ -581,7 +1049,22 @@ async def get_decisions(
     if symbol:
         sym = symbol.upper()
         rows = [r for r in rows if (r.get("symbol") or "").upper() == sym]
+    # Exclude failed/errored runs — only real BUY/SELL/HOLD decisions belong here.
+    rows = [r for r in rows if r.get("signal") in {"BUY", "SELL", "HOLD"}]
     return rows
+
+
+@app.post("/api/learning/evaluate-now")
+async def evaluate_now() -> Dict:
+    """Force-evaluate all pending decisions using current price as exit.
+
+    Ignores the normal horizon check — useful in mock/test mode where you
+    want to see PnL without waiting 24 h. Uses live market price as the
+    exit price, so the result is 'unrealized PnL if closed now.'
+    """
+    from tradingagents.monitor import outcomes
+    n = outcomes.evaluate_all_now()
+    return {"evaluated": n}
 
 
 @app.get("/api/learning/proposals")

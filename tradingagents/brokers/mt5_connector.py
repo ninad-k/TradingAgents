@@ -146,12 +146,19 @@ class NativeMT5Connector(MT5ConnectorBase):
 
         try:
             init_kwargs = {}
+            # Optionally bind to a specific terminal instance. MT5's `path`
+            # expects the terminal executable (e.g. ...\terminal64.exe), not the
+            # data folder under MetaQuotes\Terminal\<hash>. When set, this
+            # disambiguates which running terminal we attach to / launch.
+            terminal_path = os.getenv("MT5_TERMINAL_PATH", "").strip()
+            if terminal_path:
+                init_kwargs["path"] = terminal_path
             if self.login and self.password and self.server:
-                init_kwargs = {
+                init_kwargs.update({
                     "login": self.login,
                     "password": self.password,
                     "server": self.server,
-                }
+                })
 
             if not self._mt5.initialize(**init_kwargs):
                 logger.error(f"Failed to initialize MT5: {self._mt5.last_error()}")
@@ -225,6 +232,22 @@ class NativeMT5Connector(MT5ConnectorBase):
                 if tick_value > 0 and tick_size > 0 and point > 0
                 else None
             )
+            atr_points = None
+            try:
+                rates = self._mt5.copy_rates_from_pos(symbol, self._mt5.TIMEFRAME_M1, 0, 20)
+                if rates is not None and len(rates) >= 15 and point > 0:
+                    true_ranges = []
+                    previous_close = None
+                    for bar in rates:
+                        high, low, close = float(bar["high"]), float(bar["low"]), float(bar["close"])
+                        tr = high - low
+                        if previous_close is not None:
+                            tr = max(tr, abs(high - previous_close), abs(low - previous_close))
+                        true_ranges.append(tr)
+                        previous_close = close
+                    atr_points = (sum(true_ranges[-14:]) / 14.0) / point
+            except Exception:
+                logger.debug("Could not calculate broker ATR for %s", symbol, exc_info=True)
 
             return SymbolInfo(
                 symbol=symbol,
@@ -239,6 +262,7 @@ class NativeMT5Connector(MT5ConnectorBase):
                 pip_value_per_lot=pip_value_per_lot,
                 swap_long=float(sym.swap_long) if sym.swap_long else None,
                 swap_short=float(sym.swap_short) if sym.swap_short else None,
+                atr_points=atr_points,
             )
         except Exception as e:
             logger.error(f"Error getting symbol info for {symbol}: {e}")
@@ -435,12 +459,21 @@ class NativeMT5Connector(MT5ConnectorBase):
                 "volume": order.volume,
                 "type": mt5_order_type,
                 "price": price,
-                "sl": order.stop_loss,
-                "tp": order.take_profit,
+                # MT5 rejects None values — use 0.0 to mean "no SL/TP"
+                "sl": order.stop_loss or 0.0,
+                "tp": order.take_profit or 0.0,
                 "comment": order.comment or f"TradingAgents:{order.decision_id}",
+                "deviation": 20,
+                "magic": 234000,
+                "type_time": self._mt5.ORDER_TIME_GTC,
+                "type_filling": self._mt5.ORDER_FILLING_IOC,
             }
 
             result = self._mt5.order_send(request)
+            if result is None:
+                err = self._mt5.last_error()
+                logger.error("order_send returned None for %s — MT5 error: %s", order.symbol, err)
+                return {"status": "error", "message": f"MT5 rejected request: {err}"}
             if result.retcode == self._mt5.TRADE_RETCODE_DONE:
                 return {
                     "status": "executed",

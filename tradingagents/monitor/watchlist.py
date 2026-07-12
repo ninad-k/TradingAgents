@@ -26,6 +26,7 @@ class WatchlistEntry:
     display_name: str
     mode: str              # "forex", "commodity", "crypto", "index", "stock"
     interval_hours: int
+    interval_minutes: int
     analysts: List[str]
     use_tradingview: bool
     enabled: bool = True
@@ -59,7 +60,12 @@ def _analysts_for_mode(mode: str) -> List[str]:
     return list(MACRO_ANALYSTS)
 
 
-def _make_entry(symbol: str, interval_hours: int = 4, include_news: bool = False) -> WatchlistEntry:
+def _make_entry(
+    symbol: str,
+    interval_hours: int = 4,
+    include_news: bool = False,
+    interval_minutes: Optional[int] = None,
+) -> WatchlistEntry:
     """Build a WatchlistEntry with the right analyst lineup for the symbol."""
     mode = detect_symbol_mode(symbol)
     use_tv = is_tradingview_symbol(symbol)
@@ -69,6 +75,7 @@ def _make_entry(symbol: str, interval_hours: int = 4, include_news: bool = False
         display_name=get_symbol_display_name(symbol),
         mode=mode,
         interval_hours=interval_hours,
+        interval_minutes=interval_minutes if interval_minutes is not None else (1 if interval_hours <= 0 else interval_hours * 60),
         analysts=_analysts_for_mode(mode),
         use_tradingview=use_tv,
     )
@@ -87,6 +94,7 @@ def _entry_from_row(row: Dict) -> WatchlistEntry:
         display_name=row["display_name"],
         mode=mode,
         interval_hours=row["interval_hours"],
+        interval_minutes=row.get("interval_minutes", 1 if row["interval_hours"] <= 0 else row["interval_hours"] * 60),
         analysts=_analysts_for_mode(mode),
         use_tradingview=row["use_tradingview"],
         enabled=row["enabled"],
@@ -115,15 +123,21 @@ class Watchlist:
         if store.watchlist_count() > 0:
             return
         for symbol, hours, news in _DEFAULT_SEED:
-            store.save_watchlist_entry(_make_entry(symbol, hours, news))
+            store.save_watchlist_entry(_make_entry(symbol, hours, news, interval_minutes=30))
 
     def _ensure_default_entries(self) -> None:
         for symbol, hours, news in _DEFAULT_SEED:
             if self.get(symbol) is None:
-                store.save_watchlist_entry(_make_entry(symbol, hours, news))
+                store.save_watchlist_entry(_make_entry(symbol, hours, news, interval_minutes=30))
 
-    def add(self, symbol: str, interval_hours: int = 4, include_news: bool = False) -> WatchlistEntry:
-        entry = _make_entry(symbol, interval_hours, include_news)
+    def add(
+        self,
+        symbol: str,
+        interval_hours: int = 4,
+        include_news: bool = False,
+        interval_minutes: Optional[int] = None,
+    ) -> WatchlistEntry:
+        entry = _make_entry(symbol, interval_hours, include_news, interval_minutes=interval_minutes)
         store.save_watchlist_entry(entry)
         return entry
 
@@ -148,7 +162,7 @@ class Watchlist:
                 due.append(entry)
                 continue
             elapsed = now - entry.last_analysis
-            interval_seconds = 60 if entry.interval_hours <= 0 else entry.interval_hours * 3600
+            interval_seconds = max(60, entry.interval_minutes * 60)
             if elapsed.total_seconds() >= interval_seconds:
                 due.append(entry)
         return due
@@ -175,7 +189,7 @@ class Watchlist:
                     "display_name": get_symbol_display_name(e.symbol),
                     "mode": mode,
                     "interval_hours": e.interval_hours,
-                    "interval_minutes": 1 if e.interval_hours <= 0 else e.interval_hours * 60,
+                    "interval_minutes": e.interval_minutes,
                     "analysts": _analysts_for_mode(mode),
                     "use_tradingview": use_tradingview,
                     "enabled": e.enabled,

@@ -14,6 +14,7 @@ from .types import (
     InstrumentSpec,
     OrderIntent,
     PortfolioValuePoint,
+    apply_slippage,
 )
 
 
@@ -71,9 +72,10 @@ class BacktestEngine:
 
         for i, bar in enumerate(bars):
             filled_this_bar = False
-            # 1) Fill a pending entry at this bar's open.
+            # 1) Fill a pending entry at this bar's open (slippage adverse to side).
             if pending is not None and portfolio.is_flat():
-                portfolio.open(side=pending.side, date=bar.date, price=bar.open,
+                fill = apply_slippage(self._spec, pending.side, bar.open)
+                portfolio.open(side=pending.side, date=bar.date, price=fill,
                                volume=pending.volume, stop_loss=pending.stop_loss,
                                take_profit=pending.take_profit,
                                max_holding_hours=pending.max_holding_hours)
@@ -88,6 +90,9 @@ class BacktestEngine:
                 exit_result = self._check_exit(portfolio.open_trade, bar, bars_held)
                 if exit_result is not None:
                     exit_price, reason = exit_result
+                    # Closing fill executes on the opposite side, so slippage is adverse.
+                    exit_action = "SELL" if portfolio.open_trade.side == "BUY" else "BUY"
+                    exit_price = apply_slippage(self._spec, exit_action, exit_price)
                     trade = portfolio.close(bar.date, exit_price, reason)
                     trades.append(trade)
                     bars_held = 0
@@ -106,12 +111,14 @@ class BacktestEngine:
         # 5. Force-close any open position at last bar's close
         if bars and not portfolio.is_flat():
             last = bars[-1]
-            trade = portfolio.close(last.date, last.close, "EOD")
+            exit_action = "SELL" if portfolio.open_trade.side == "BUY" else "BUY"
+            exit_price = apply_slippage(self._spec, exit_action, last.close)
+            trade = portfolio.close(last.date, exit_price, "EOD")
             trades.append(trade)
             # Update the last value point with the closed equity
             values[-1] = PortfolioValuePoint(date=last.date, value=portfolio.equity(last.close))
 
-        metrics = calculator.compute_metrics(values)
+        metrics = calculator.compute_metrics(values, trades)
         benchmark = buy_and_hold(bars, cfg.initial_capital, self._spec)
 
         return BacktestResult(

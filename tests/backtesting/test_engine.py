@@ -5,12 +5,14 @@ import pytest
 
 from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
 from tradingagents.backtesting.benchmarks import buy_and_hold
-from tradingagents.backtesting.data import FakeBarProvider, get_spec
+from tradingagents.backtesting.data import FakeBarProvider
 from tradingagents.backtesting.engine import BacktestEngine
 from tradingagents.backtesting.position_models import EquitySharesModel
-from tradingagents.backtesting.types import Bar, BacktestConfig
+from tradingagents.backtesting.types import Bar, BacktestConfig, InstrumentKind, InstrumentSpec
 
-EQ = get_spec("AAPL")
+# Zero-cost equity spec: these tests assert exact fill/exit mechanics, so they
+# must be insulated from the transaction-cost defaults carried by get_spec().
+EQ = InstrumentSpec("AAPL", InstrumentKind.EQUITY, 0.01, 0.0, 1, 1e9, 1, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +34,7 @@ class _StubController:
 # ---------------------------------------------------------------------------
 
 def _equity_spec():
-    return get_spec("AAPL")
+    return EQ
 
 
 def _buy_decision(tp: float) -> PortfolioDecision:

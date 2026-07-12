@@ -1,14 +1,40 @@
+import { useState, useEffect, useRef } from 'react'
 import type { Trade } from '../types'
+import { getTrades } from '../api'
 
-interface TradeHistoryProps {
-  trades: Trade[]
-}
+const REFRESH_MS = 15_000
 
-export function TradeHistory({ trades }: TradeHistoryProps) {
-  if (!trades || trades.length === 0) {
+export function TradeHistory() {
+  const [trades, setTrades] = useState<Trade[]>([])
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+
+    const load = async () => {
+      try {
+        const data = await getTrades(20) as Trade[]
+        if (!mountedRef.current) return
+        setTrades(data)
+        setLastUpdated(new Date())
+      } catch {
+        // background refresh — silently skip
+      }
+    }
+
+    load()
+    const id = window.setInterval(load, REFRESH_MS)
+    return () => {
+      mountedRef.current = false
+      window.clearInterval(id)
+    }
+  }, [])
+
+  if (trades.length === 0) {
     return (
       <div>
-        <div className="card-title">Trade History</div>
+        <div className="card-title">Trade History (Last 20)</div>
         <div style={{
           color: 'var(--color-text-muted)',
           textAlign: 'center',
@@ -23,7 +49,14 @@ export function TradeHistory({ trades }: TradeHistoryProps) {
 
   return (
     <div>
-      <div className="card-title">Trade History (Last 20)</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div className="card-title" style={{ margin: 0 }}>Trade History (Last 20)</div>
+        {lastUpdated && (
+          <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+            Updated {lastUpdated.toLocaleTimeString()}
+          </span>
+        )}
+      </div>
 
       <div className="table-container">
         <table className="table">
@@ -40,7 +73,7 @@ export function TradeHistory({ trades }: TradeHistoryProps) {
             </tr>
           </thead>
           <tbody>
-            {trades.slice(0, 20).map((trade, idx) => {
+            {trades.map((trade, idx) => {
               const isLong = trade.direction.toLowerCase() === 'long' || trade.direction.toLowerCase() === 'buy'
               const dirColor = isLong ? 'var(--color-profit)' : 'var(--color-loss)'
               return (

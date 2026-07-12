@@ -2,7 +2,7 @@
 #
 # Usage:
 #   pwsh scripts/use-env.ps1 demo         # small Ollama models, fast (for demos)
-#   pwsh scripts/use-env.ps1 production   # gemma4:latest, full quality (for server)
+#   pwsh scripts/use-env.ps1 production   # qwen2.5:1.5b, cheapest local Ollama
 #   pwsh scripts/use-env.ps1 status       # show which profile is currently active
 
 param(
@@ -44,5 +44,4 @@ if ($Profile -eq 'demo') {
     Write-Host ""
     Write-Host "Pre-warm Ollama before the demo:"
     Write-Host "  ollama run qwen2.5:1.5b 'warm'"
-    Write-Host "  ollama run qwen2.5:3b   'warm'"
 }

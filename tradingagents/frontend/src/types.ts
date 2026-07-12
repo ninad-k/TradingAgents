@@ -46,6 +46,15 @@ export interface Trade {
   comment?: string | null
 }
 
+export interface TokenUsage {
+  tokens_in: number
+  tokens_out: number
+  total: number
+  llm_calls: number
+  budget_max: number
+  llm_enabled: boolean
+}
+
 export interface DashboardStatus {
   timestamp: string
   connected: boolean
@@ -54,6 +63,7 @@ export interface DashboardStatus {
   recent_trades: Trade[]
   total_positions: number
   total_closed_trades: number
+  token_usage?: TokenUsage | null
 }
 
 export interface TradeEvent {
@@ -245,9 +255,13 @@ export interface AppSettings {
   analysis_timeout_seconds: number
   auto_trade_enabled: boolean
   auto_trade_paper_only: boolean
+  mock_mode_enabled: boolean
   trade_comment: string
   max_risk_per_trade_percent: number
   max_risk_per_trade_usd: number | null
+  market_timeframe: string
+  llm_enabled: boolean
+  token_budget_max: number
 }
 
 export interface SettingsResponse {
