@@ -20,6 +20,8 @@ _MUTABLE_KEYS = {
     "llm_provider",
     "deep_think_llm",
     "quick_think_llm",
+    "premium_deep_enabled",
+    "premium_deep_llm",
     "llm_fallback_enabled",
     "llm_prefer_fallback",
     "fallback_llm_provider",

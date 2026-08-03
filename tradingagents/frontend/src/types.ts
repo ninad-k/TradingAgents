@@ -245,6 +245,8 @@ export interface AppSettings {
   llm_provider: string
   deep_think_llm: string
   quick_think_llm: string
+  premium_deep_enabled: boolean
+  premium_deep_llm: string
   llm_fallback_enabled: boolean
   llm_prefer_fallback: boolean
   fallback_llm_provider: string

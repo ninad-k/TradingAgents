@@ -171,6 +171,14 @@ export function LearnedParamsPanel() {
           <Field label="Deep Model">
             <ModelInput value={settings.deep_think_llm} onChange={v => patch('deep_think_llm', v)} />
           </Field>
+          <CheckboxRow
+            label={`Premium deep model (${settings.premium_deep_llm || 'kimi-k3:cloud'}) — needs Ollama Pro/Max`}
+            checked={settings.premium_deep_enabled}
+            onChange={v => patch('premium_deep_enabled', v)}
+          />
+          <Field label="Premium Deep Model">
+            <ModelInput value={settings.premium_deep_llm} onChange={v => patch('premium_deep_llm', v)} />
+          </Field>
           <Field label="Fallback Quick Model">
             <ModelInput value={settings.fallback_quick_think_llm} onChange={v => patch('fallback_quick_think_llm', v)} />
           </Field>

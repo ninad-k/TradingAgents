@@ -205,6 +205,27 @@ class LiveProgressTracker:
             elif status == "done" and run.active_component == component_key:
                 run.active_component = None
 
+    def note_component_activity(self, run_id: str, component_key: str) -> None:
+        """Mark a component as running unless it already produced real output.
+
+        Used for intermediate LangGraph chunks (tool-calling iterations) that
+        prove a node is working but don't carry its final report yet.
+        """
+        if component_key not in COMPONENT_KEYS:
+            return
+        with self._lock:
+            run = self._runs.get(run_id)
+            if not run:
+                return
+            entry = run.components.get(component_key)
+            if not entry or entry["full_text"]:
+                return
+            entry["status"] = "running"
+            if not entry.get("started_at"):
+                entry["started_at"] = _now()
+            entry["updated_at"] = _now()
+            run.active_component = component_key
+
     def apply_graph_chunk(self, run_id: str, chunk: Dict) -> None:
         """Translate a LangGraph stream chunk into component status updates."""
         if not chunk:
@@ -238,7 +259,13 @@ class LiveProgressTracker:
                     if risk.get("conservative_history"):
                         self.mark_component(run_id, "conservative_risk", "done", str(risk["conservative_history"]))
             if key:
-                self.mark_component(run_id, key, "done", preview)
+                if preview:
+                    self.mark_component(run_id, key, "done", preview)
+                else:
+                    # The node emitted activity (e.g. a tool-calling iteration)
+                    # without its final report — it is still working. Marking it
+                    # "done" here would show an empty node on the Flow page.
+                    self.note_component_activity(run_id, key)
                 self.set_stage(run_id, node_name)
 
     def finish_run(

@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import type { TokenUsage } from '../types'
-import { updateSettings, resetTokenUsage } from '../api'
+import { useEffect, useState } from 'react'
+import type { AppSettings, TokenUsage } from '../types'
+import { getSettings, updateSettings, resetTokenUsage } from '../api'
 
 interface SonnetTokenPanelProps {
   usage?: TokenUsage | null
@@ -13,13 +13,27 @@ function formatTokens(n: number): string {
 }
 
 /**
- * Shows the running LLM token count and the "Stop Sonnet" kill switch.
- * The displayed numbers stay live via the dashboard's 2s status broadcast;
- * the buttons write settings/counter state and let the next poll reconcile.
+ * Shows the running LLM token count (across ALL providers/models) and the
+ * LLM kill switch. The displayed numbers stay live via the dashboard's 2s
+ * status broadcast; the buttons write settings/counter state and let the
+ * next poll reconcile. The active model line comes from /api/settings.
  */
 export function SonnetTokenPanel({ usage }: SonnetTokenPanelProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [settings, setSettings] = useState<AppSettings | null>(null)
+
+  useEffect(() => {
+    getSettings().then(s => setSettings(s.settings)).catch(() => {})
+  }, [])
+
+  const deepModel = settings?.premium_deep_enabled
+    ? settings.premium_deep_llm
+    : settings?.deep_think_llm
+  const modelLine = settings
+    ? `${settings.llm_provider} · deep: ${deepModel} · quick: ${settings.quick_think_llm}` +
+      (settings.premium_deep_enabled ? ' · premium ON' : '')
+    : null
 
   const enabled = usage?.llm_enabled ?? true
   const total = usage?.total ?? 0
@@ -65,7 +79,7 @@ export function SonnetTokenPanel({ usage }: SonnetTokenPanelProps) {
       }}
     >
       <div>
-        <div className="card-title">Sonnet Token Usage</div>
+        <div className="card-title">LLM Token Usage</div>
         <div className="card-value" style={{ color: overBudget ? '#f85149' : undefined }}>
           {formatTokens(total)}
         </div>
@@ -76,6 +90,11 @@ export function SonnetTokenPanel({ usage }: SonnetTokenPanelProps) {
             ? ` · ${pctOfBudget.toFixed(0)}% of ${formatTokens(budget)} budget`
             : ' · no budget cap'}
         </div>
+        {modelLine && (
+          <div className="card-subtext" style={{ marginTop: 2, fontWeight: 600 }}>
+            {modelLine}
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -86,7 +105,7 @@ export function SonnetTokenPanel({ usage }: SonnetTokenPanelProps) {
             color: enabled ? '#3fb950' : '#f85149',
           }}
         >
-          {enabled ? 'Sonnet ACTIVE' : 'Sonnet STOPPED'}
+          {enabled ? 'LLM ACTIVE' : 'LLM STOPPED'}
         </span>
         <button
           onClick={toggleSonnet}
@@ -95,7 +114,7 @@ export function SonnetTokenPanel({ usage }: SonnetTokenPanelProps) {
           style={{ padding: '8px 16px' }}
           title={enabled ? 'Immediately halt all LLM analysis (stops token spend)' : 'Resume LLM analysis'}
         >
-          {busy ? '…' : enabled ? 'Stop Sonnet' : 'Resume Sonnet'}
+          {busy ? '…' : enabled ? 'Stop LLM' : 'Resume LLM'}
         </button>
         <button
           onClick={resetCounter}

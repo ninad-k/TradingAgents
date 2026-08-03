@@ -670,6 +670,26 @@ def _run_single_analysis(
             from tradingagents.monitor.flow_report import write_flow_report
             write_flow_report(symbol_config, result, trace, decision_id)
 
+            # Stamp the actual fill price so the outcomes evaluator computes
+            # P&L from the real entry, not a delayed price-feed lookup.
+            # (Mirrors the mock path — previously live trades never got this.)
+            if execution and execution.get("execution_price"):
+                try:
+                    from tradingagents.monitor import learning_config as _lc
+                    try:
+                        _params = _lc.load_learned_params()
+                    except Exception:
+                        _params = {}
+                    store.save_outcome(
+                        decision_id=decision_id,
+                        entry_price=execution["execution_price"],
+                        exit_price=None,
+                        pnl_pct=None,
+                        horizon_hours=int(_params.get("hold_horizon_hours", 24) or 24),
+                    )
+                except Exception as _e:
+                    logger.warning("Could not stamp entry price for decision %s: %s", decision_id, _e)
+
         logger.info(f"Analysis complete for {symbol}: {signal}")
 
         live_progress.finish_run(run_id, "success", signal=signal)
@@ -769,6 +789,33 @@ def _maybe_execute_trade(
                     return {"status": "blocked", "reason": setup_reason, "setup": setup.to_dict()}
             except Exception as exc:
                 return {"status": "blocked", "reason": f"Setup validation unavailable: {exc}"}
+
+        # Liquidity gate: a deterministic multi-timeframe scan must confirm a
+        # real pattern (liquidity sweep + structure alignment) behind the
+        # signal. Computed from broker bars, never from LLM text; missing data
+        # fails closed so a hallucinated thesis can't reach the broker.
+        if config.get("liquidity_gate_enabled", True):
+            try:
+                from tradingagents.analytics.liquidity import (
+                    build_liquidity_map,
+                    qualify_liquidity_setup,
+                )
+
+                max_age = int(config.get("liquidity_sweep_max_age_bars", 20) or 20)
+                lmap = build_liquidity_map(symbol, sweep_max_age_bars=max_age)
+                liq_ok, liq_reason = qualify_liquidity_setup(
+                    lmap, signal, sweep_max_age_bars=max_age
+                )
+                if not liq_ok:
+                    logger.info("Liquidity gate blocked %s %s: %s", signal, symbol, liq_reason)
+                    return {
+                        "status": "blocked",
+                        "reason": f"[liquidity-gate] {liq_reason}",
+                        "liquidity": lmap.to_dict(),
+                    }
+                logger.info("Liquidity gate passed for %s %s: %s", signal, symbol, liq_reason)
+            except Exception as exc:
+                return {"status": "blocked", "reason": f"[liquidity-gate] scan unavailable: {exc}"}
         risk_percent = float(config.get("max_risk_per_trade_percent", 0.5) or 0.5)
         risk_usd = config.get("max_risk_per_trade_usd")
         generator = OrderGenerator(

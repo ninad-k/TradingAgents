@@ -15,23 +15,35 @@ class NormalizedChatOpenAI(ChatOpenAI):
     downstream handling.
     """
 
+    # Default method for with_structured_output; set per provider in get_llm().
+    structured_output_method: str = "function_calling"
+
     def invoke(self, input, config=None, **kwargs):
         return normalize_content(super().invoke(input, config, **kwargs))
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
-        """Wrap with structured output, defaulting to function_calling for OpenAI.
+        """Wrap with structured output, defaulting to a per-provider method.
 
-        langchain-openai's Responses-API-parse path (the default for json_schema
-        when use_responses_api=True) calls response.model_dump(...) on the OpenAI
-        SDK's union-typed parsed response, which makes Pydantic emit ~20
-        PydanticSerializationUnexpectedValue warnings per call. The function-calling
-        path returns a plain tool-call shape that does not trigger that
-        serialization, so it is the cleaner choice for our combination of
-        use_responses_api=True + with_structured_output. Both paths use OpenAI's
-        strict mode and produce the same typed Pydantic instance.
+        OpenAI (function_calling): langchain-openai's Responses-API-parse path
+        (the default for json_schema when use_responses_api=True) calls
+        response.model_dump(...) on the OpenAI SDK's union-typed parsed
+        response, which makes Pydantic emit ~20
+        PydanticSerializationUnexpectedValue warnings per call. The
+        function-calling path returns a plain tool-call shape that does not
+        trigger that serialization, so it is the cleaner choice for our
+        combination of use_responses_api=True + with_structured_output. Both
+        paths use OpenAI's strict mode and produce the same typed Pydantic
+        instance.
+
+        Ollama local models (json_schema): small local models frequently emit
+        empty tool args on the function-calling path, failing schema
+        validation. Ollama's response_format json_schema path uses
+        grammar-constrained decoding, which is reliable even for ~4B models.
+        Ollama cloud models (":cloud" tags) ignore response_format json_schema
+        and return prose, so they stay on function_calling.
         """
         if method is None:
-            method = "function_calling"
+            method = self.structured_output_method
         return super().with_structured_output(schema, method=method, **kwargs)
 
 # Kwargs forwarded from user config to ChatOpenAI
@@ -102,6 +114,9 @@ class OpenAIClient(BaseLLMClient):
         # all model families. Third-party providers use Chat Completions.
         if self.provider == "openai":
             llm_kwargs["use_responses_api"] = True
+
+        if self.provider == "ollama" and not self.model.endswith(":cloud"):
+            llm_kwargs["structured_output_method"] = "json_schema"
 
         return NormalizedChatOpenAI(**llm_kwargs)
 

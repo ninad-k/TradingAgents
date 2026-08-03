@@ -203,7 +203,16 @@ def build_scoreboard(window_days: int, rows: Optional[list[dict[str, Any]]] = No
     if rows is None:
         since = datetime.now() - timedelta(days=window_days)
         rows = store.recent_decisions_with_outcomes(since=since, limit=10000)
-    pnls = [r["pnl_pct"] for r in rows if r.get("pnl_pct") is not None]
+    # Headline stats score ACTIONABLE decisions only. HOLD outcomes are
+    # hard-coded to pnl_pct=0.0, so including them floods win_rate/mean with
+    # zeros (observed live: 56/67 rows were HOLD, dragging win_rate to 4%
+    # when actual SELLs won 60%) and misleads the reviewer LLM. The
+    # per-signal breakdown below still reports HOLD separately.
+    pnls = [
+        r["pnl_pct"] for r in rows
+        if r.get("pnl_pct") is not None
+        and (r.get("signal") or "").upper() in ("BUY", "SELL")
+    ]
     n_evaluated = len(pnls)
 
     if n_evaluated == 0:
@@ -442,6 +451,25 @@ def _extract_json(text: str) -> Optional[dict[str, Any]]:
     return None
 
 
+def _normalize_key(key: str, current: dict[str, Any]) -> Optional[str]:
+    """Map a near-miss key name onto the real learned_params key.
+
+    LLMs occasionally hallucinate key variants (observed live:
+    'confidence_threshold' for 'signal_confidence_threshold'). Rather than
+    burning a whole review cycle on a name slip, accept a proposed key that
+    unambiguously matches exactly one real key by substring; anything
+    ambiguous or unmatched is still rejected.
+    """
+    if key in current:
+        return key
+    lowered = key.strip().lower()
+    matches = [
+        real for real in current
+        if lowered in real.lower() or real.lower() in lowered
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _validate_delta(
     proposal: Optional[dict[str, Any]], current: dict[str, Any]
 ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -450,10 +478,23 @@ def _validate_delta(
     key = proposal.get("key")
     if key is None:
         return None, proposal.get("rationale") or "reviewer declined to propose"
-    if key not in current:
+    normalized = _normalize_key(str(key), current)
+    if normalized is None:
         return None, f"unknown key {key!r} not in learned_params"
+    if normalized != key:
+        logger.info("Reviewer proposed near-miss key %r; normalized to %r", key, normalized)
+        proposal = {**proposal, "key": normalized}
+    key = normalized
     old = proposal.get("old", current[key])
     new = proposal.get("new")
+    if new is None:
+        # LLMs sometimes rename the field (new_value, proposed, value…).
+        # Accept an unambiguous alias rather than wasting the review cycle.
+        for alias in ("new_value", "proposed", "proposed_value", "value", "to"):
+            if proposal.get(alias) is not None:
+                new = proposal[alias]
+                logger.info("Reviewer proposal used %r for 'new'; accepted", alias)
+                break
     if new is None:
         return None, "missing 'new' value"
     if type(new) is not type(current[key]):

@@ -123,8 +123,11 @@ MODEL_OPTIONS: ProviderModeOptions = {
         ],
     },
     # OpenRouter: fetched dynamically. Azure: any deployed model name.
+    # Ollama also serves cloud models (":cloud" tags) through the local daemon
+    # after `ollama signin` — inference runs on ollama.com, not this machine.
     "ollama": {
         "quick": [
+            ("Qwen3 4B (local, tool calling)", "qwen3:4b"),
             ("Qwen 2.5 1.5B (cheapest local)", "qwen2.5:1.5b"),
             ("Qwen 2.5 3B (local)", "qwen2.5:3b"),
             ("Gemma 3 (4B, local fallback)", "gemma3:4b"),
@@ -133,6 +136,8 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"),
         ],
         "deep": [
+            ("GLM-5.2 (Ollama cloud, needs signin)", "glm-5.2:cloud"),
+            ("Kimi K3 (Ollama cloud, needs Pro/Max)", "kimi-k3:cloud"),
             ("Qwen 2.5 1.5B (cheapest local)", "qwen2.5:1.5b"),
             ("Qwen 2.5 3B (local)", "qwen2.5:3b"),
             ("Gemma 3 (4B, local fallback)", "gemma3:4b"),

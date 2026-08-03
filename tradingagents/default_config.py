@@ -28,6 +28,12 @@ DEFAULT_CONFIG = {
     #   DEEP_THINK_LLM=deepseek-ai/DeepSeek-V3-0324 (needs HF_TOKEN).
     "deep_think_provider": os.getenv("DEEP_THINK_PROVIDER") or None,
     "quick_think_provider": os.getenv("QUICK_THINK_PROVIDER") or None,
+    # Premium deep-model switch. When enabled, the deep tier routes to
+    # `premium_deep_llm` (an Ollama model tag — kimi-k3:cloud needs an Ollama
+    # Pro/Max subscription) provided that model is pulled locally; otherwise
+    # the configured deep model keeps running. Toggleable from the dashboard.
+    "premium_deep_enabled": os.getenv("TRADINGAGENTS_PREMIUM_DEEP_ENABLED", "false").lower() == "true",
+    "premium_deep_llm": os.getenv("TRADINGAGENTS_PREMIUM_DEEP_LLM", "kimi-k3:cloud"),
     "llm_fallback_enabled": os.getenv("LLM_FALLBACK_ENABLED", "true").lower() == "true",
     "llm_prefer_fallback": os.getenv("LLM_PREFER_FALLBACK", "true").lower() == "true",
     "fallback_llm_provider": os.getenv("FALLBACK_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "ollama")),
@@ -100,6 +106,11 @@ DEFAULT_CONFIG = {
     "min_reward_cost_multiple": float(os.getenv("TRADINGAGENTS_MIN_REWARD_COST_MULTIPLE", "4")),
     "atr_stop_multiplier": float(os.getenv("TRADINGAGENTS_ATR_STOP_MULTIPLIER", "1.25")),
     "setup_filter_enabled": os.getenv("TRADINGAGENTS_SETUP_FILTER_ENABLED", "true").lower() == "true",
+    # Liquidity gate: block BUY/SELL execution unless the deterministic
+    # multi-timeframe scanner confirms a liquidity sweep + structure alignment
+    # behind the signal (fails closed when broker data is unavailable).
+    "liquidity_gate_enabled": os.getenv("TRADINGAGENTS_LIQUIDITY_GATE_ENABLED", "true").lower() == "true",
+    "liquidity_sweep_max_age_bars": int(os.getenv("TRADINGAGENTS_LIQUIDITY_SWEEP_MAX_AGE_BARS", "20")),
     "max_spread_atr_ratio": float(os.getenv("TRADINGAGENTS_MAX_SPREAD_ATR_RATIO", "0.40")),
     "min_volume_ratio": float(os.getenv("TRADINGAGENTS_MIN_VOLUME_RATIO", "0.20")),
     # Market-data bar granularity for the Market Analyst. "auto" (or empty) keeps

@@ -5,7 +5,26 @@ from tradingagents.agents.utils.agent_utils import (
     get_language_instruction,
     get_stock_data,
 )
+from tradingagents.agents.utils.liquidity_tools import get_liquidity_map
 from tradingagents.dataflows.config import get_config
+
+
+def _computed_liquidity_section(symbol: str) -> str:
+    """Deterministic liquidity map appended to every market report.
+
+    Computed in code from broker bars — included verbatim so downstream agents
+    reason over real levels instead of model-generated ones. Best-effort: an
+    unavailable feed yields an explicit 'unavailable' note, never a fabrication.
+    """
+    from tradingagents.analytics.liquidity import build_liquidity_map
+
+    try:
+        return "\n\n" + build_liquidity_map(symbol).to_markdown()
+    except Exception as exc:
+        return (
+            "\n\n### Liquidity Map\n\n"
+            f"_Deterministic liquidity scan unavailable for {symbol}: {exc}_"
+        )
 
 
 def create_market_analyst(llm):
@@ -17,6 +36,7 @@ def create_market_analyst(llm):
         tools = [
             get_stock_data,
             get_indicators,
+            get_liquidity_map,
         ]
 
         system_message = (
@@ -44,7 +64,11 @@ Volatility Indicators:
 Volume-Based Indicators:
 - vwma: VWMA: A moving average weighted by volume. Usage: Confirm trends by integrating price action with volume data. Tips: Watch for skewed results from volume spikes; use in combination with other volume analyses.
 
-- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names. Write a very detailed and nuanced report of the trends you observe. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."""
+- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names.
+
+Liquidity concepts: also call get_liquidity_map to retrieve the COMPUTED multi-timeframe liquidity map (equal highs/lows pools, liquidity sweeps, market structure, premium/discount). Treat its levels and sweeps as ground truth — cite them verbatim and NEVER invent liquidity levels, sweeps, or structure that are not in that table. A trade thesis should reference a concrete liquidity pattern (e.g. a recent sell-side sweep for longs) when one exists; if the map shows no qualifying pattern, say so explicitly.
+
+Write a very detailed and nuanced report of the trends you observe. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."""
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + get_language_instruction()
         )
@@ -79,6 +103,12 @@ Volume-Based Indicators:
 
         if len(result.tool_calls) == 0:
             report = result.content
+            if report:
+                # Always append the code-computed liquidity map so downstream
+                # agents ground their debate in real levels (anti-hallucination).
+                report = str(report) + _computed_liquidity_section(
+                    state["company_of_interest"]
+                )
 
         return {
             "messages": [result],

@@ -40,6 +40,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_global_news
 )
 from tradingagents.agents.utils.macro_context_tool import get_macro_context
+from tradingagents.agents.utils.liquidity_tools import get_liquidity_map
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
@@ -140,6 +141,7 @@ class TradingAgentsGraph:
 
     def _resolve_llm_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Apply optional fallback model selection before LLM construction."""
+        config = self._apply_premium_deep(config)
         if not config.get("llm_fallback_enabled", True):
             return config
 
@@ -185,6 +187,34 @@ class TradingAgentsGraph:
         )
         return resolved
 
+    def _apply_premium_deep(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Route the deep tier to the premium Ollama model when the switch is on.
+
+        The premium model (e.g. kimi-k3:cloud, which needs an Ollama Pro/Max
+        subscription) is only used when it is actually pulled in the local
+        Ollama daemon; otherwise the configured deep model is kept so an
+        un-provisioned toggle can never collapse the run onto the fallback
+        provider.
+        """
+        if not config.get("premium_deep_enabled"):
+            return config
+        premium = str(config.get("premium_deep_llm") or "").strip()
+        if not premium or premium == config.get("deep_think_llm"):
+            return config
+        installed = list_ollama_models()
+        if installed and premium not in installed:
+            logger.warning(
+                "Premium deep model %s is enabled but not pulled in Ollama "
+                "(run `ollama pull %s`); keeping deep model %s",
+                premium, premium, config.get("deep_think_llm"),
+            )
+            return config
+        resolved = config.copy()
+        resolved["deep_think_provider"] = "ollama"
+        resolved["deep_think_llm"] = premium
+        logger.info("Premium deep model active: %s", premium)
+        return resolved
+
     def _get_provider_kwargs(self, provider: Optional[str] = None) -> Dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation.
 
@@ -220,6 +250,8 @@ class TradingAgentsGraph:
                     get_stock_data,
                     # Technical indicators
                     get_indicators,
+                    # Deterministic multi-timeframe liquidity scanner
+                    get_liquidity_map,
                 ]
             ),
             "social": ToolNode(
@@ -258,11 +290,30 @@ class TradingAgentsGraph:
         or network error).
         """
         if is_tradingview_symbol(ticker):
-            logger.info(
-                "Skipping yfinance return lookup for TradingView symbol %s",
-                ticker,
-            )
-            return None, None, None
+            # Forex/commodity/crypto/index: yfinance can't price these tickers,
+            # but the monitor's price helper (TradingView → MT5 fallback) can.
+            # Without this branch these symbols never resolve, so the memory
+            # loop never learns from exactly the instruments being traded.
+            try:
+                from tradingagents.monitor.prices import get_close_at
+
+                start_ts = datetime.strptime(trade_date, "%Y-%m-%d")
+                end_ts = start_ts + timedelta(days=holding_days)
+                if end_ts > datetime.now():
+                    return None, None, None  # horizon not elapsed yet
+                entry = get_close_at(ticker, start_ts)
+                exit_ = get_close_at(ticker, end_ts)
+                if not entry or not exit_:
+                    return None, None, None
+                raw = float((exit_ - entry) / entry)
+                # No meaningful equity benchmark for these assets — alpha=raw.
+                return raw, raw, holding_days
+            except Exception as e:
+                logger.warning(
+                    "Could not resolve outcome for %s on %s (will retry next run): %s",
+                    ticker, trade_date, e,
+                )
+                return None, None, None
         try:
             start = datetime.strptime(trade_date, "%Y-%m-%d")
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
