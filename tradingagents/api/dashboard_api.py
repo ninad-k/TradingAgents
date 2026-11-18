@@ -246,7 +246,7 @@ async def _run_local_codex_schedule(interval_seconds: int, symbols: List[str]) -
 
     async def trigger(symbol: str) -> None:
         def post() -> None:
-            url = f"http://127.0.0.1:8000/api/codex/run/{symbol}?execute_trade=true"
+            url = f"http://127.0.0.1:8009/api/codex/run/{symbol}?execute_trade=true"
             request = UrlRequest(url, data=b"", method="POST")
             with urlopen(request, timeout=120) as response:
                 response.read()
@@ -1212,4 +1212,4 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=8009, log_level="info")

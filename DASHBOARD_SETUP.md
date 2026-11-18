@@ -72,12 +72,12 @@ pip install fastapi uvicorn pydantic
 
 cd /Users/ninadk/PycharmProjects/TradingAgents
 
-python -m uvicorn tradingagents.api.dashboard_api:app --host 127.0.0.1 --port 8000 --reload
+python -m uvicorn tradingagents.api.dashboard_api:app --host 127.0.0.1 --port 8009 --reload
 ```
 
 You should see:
 ```
-INFO:     Uvicorn running on http://127.0.0.1:8000
+INFO:     Uvicorn running on http://127.0.0.1:8009
 INFO:     Application startup complete
 ```
 
@@ -101,12 +101,12 @@ You should see:
 ```
 VITE v5.0.2  ready in 123 ms
 
-➜  Local:   http://localhost:3000/
+➜  Local:   http://localhost:3009/
 ```
 
 #### 3d. Open the Dashboard
 
-Open your browser to: **http://localhost:3000**
+Open your browser to: **http://localhost:3009**
 
 You should see a professional dashboard with:
 - ✅ Trading mode badge (Paper/Live)
@@ -138,16 +138,16 @@ Test the API directly:
 
 ```bash
 # Get account status
-curl http://localhost:8000/api/status
+curl http://localhost:8009/api/status
 
 # Get recent trades
-curl http://localhost:8000/api/trades
+curl http://localhost:8009/api/trades
 
 # Get portfolio summary
-curl http://localhost:8000/api/portfolio
+curl http://localhost:8009/api/portfolio
 
 # Get analytics
-curl http://localhost:8000/api/analytics
+curl http://localhost:8009/api/analytics
 ```
 
 ---
@@ -210,7 +210,7 @@ OPENAI_API_KEY=your_key_here
 ### API Configuration
 
 The API automatically:
-- Binds to `127.0.0.1:8000` (localhost only, secure)
+- Binds to `127.0.0.1:8009` (localhost only, secure)
 - Disables CORS (no external access)
 - Provides WebSocket updates every 2 seconds
 - Reads trading mode from config
@@ -218,7 +218,7 @@ The API automatically:
 ### Frontend Configuration
 
 The React app automatically:
-- Connects to `http://localhost:8000` (hardcoded for localhost)
+- Connects to `http://localhost:8009` (hardcoded for localhost)
 - Establishes WebSocket connection for live updates
 - Falls back gracefully if API is unavailable
 
@@ -227,15 +227,15 @@ The React app automatically:
 ## Troubleshooting
 
 ### Issue: Dashboard shows "Connecting..."
-**Solution:** Ensure FastAPI backend is running on port 8000:
+**Solution:** Ensure FastAPI backend is running on port 8009:
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8009/health
 ```
 
 ### Issue: WebSocket connection fails
 **Solution:** Check that both backend and frontend are running:
-1. Backend: `http://localhost:8000` (in a terminal)
-2. Frontend: `http://localhost:3000` (in browser)
+1. Backend: `http://localhost:8009` (in a terminal)
+2. Frontend: `http://localhost:3009` (in browser)
 
 ### Issue: "Failed to connect to trading dashboard API"
 **Solution:** 
@@ -257,7 +257,7 @@ For production use:
 
 1. **Backend:**
    ```bash
-   python -m uvicorn tradingagents.api.dashboard_api:app --host 0.0.0.0 --port 8000
+   python -m uvicorn tradingagents.api.dashboard_api:app --host 0.0.0.0 --port 8009
    ```
    - Add authentication middleware
    - Enable CORS only for your domain
@@ -280,7 +280,7 @@ For production use:
 3. ✅ Monitor in terminal: Watch the enhanced dashboard
 4. ✅ Start backend: `python -m uvicorn tradingagents.api.dashboard_api:app ...`
 5. ✅ Start frontend: `cd tradingagents/frontend && npm run dev`
-6. ✅ Open dashboard: Navigate to `http://localhost:3000`
+6. ✅ Open dashboard: Navigate to `http://localhost:3009`
 
 ---
 

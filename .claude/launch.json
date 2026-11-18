@@ -4,15 +4,15 @@
     {
       "name": "frontend",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["vite", "--host", "127.0.0.1", "--port", "5174", "--clearScreen", "false"],
+      "runtimeArgs": ["vite", "--host", "127.0.0.1", "--port", "3009", "--clearScreen", "false"],
       "cwd": "tradingagents/frontend",
-      "port": 5174
+      "port": 3009
     },
     {
       "name": "backend",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "uvicorn", "tradingagents.api.dashboard_api:app", "--host", "127.0.0.1", "--port", "8000"],
-      "port": 8000
+      "runtimeArgs": ["-m", "uvicorn", "tradingagents.api.dashboard_api:app", "--host", "127.0.0.1", "--port", "8009"],
+      "port": 8009
     }
   ]
 }

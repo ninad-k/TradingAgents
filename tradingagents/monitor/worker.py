@@ -11,7 +11,7 @@ Usage:
     #   Terminal 2: dashboard API with the in-process scheduler disabled
 
     WATCHLIST_DISABLE_IN_PROCESS=1 \\
-        uvicorn tradingagents.api.dashboard_api:app --host 127.0.0.1 --port 8000
+        uvicorn tradingagents.api.dashboard_api:app --host 127.0.0.1 --port 8009
 
     python -m tradingagents.monitor.worker
 

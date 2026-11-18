@@ -103,7 +103,7 @@ TRADING_MODE=paper
 - `models.py` - Pydantic models for type safety and validation
 
 **Features:**
-- Localhost-only binding (127.0.0.1:8000)
+- Localhost-only binding (127.0.0.1:8009)
 - CORS disabled for security
 - WebSocket support for real-time updates (2-second interval)
 
@@ -244,7 +244,7 @@ pip install fastapi uvicorn pydantic
 **3. Start Backend Server**
 ```bash
 python -m uvicorn tradingagents.api.dashboard_api:app \
-  --host 127.0.0.1 --port 8000 --reload
+  --host 127.0.0.1 --port 8009 --reload
 ```
 
 **4. Install Frontend Dependencies**
@@ -256,7 +256,7 @@ npm install
 **5. Start Frontend Dev Server**
 ```bash
 npm run dev
-# Opens at http://localhost:3000
+# Opens at http://localhost:3009
 ```
 
 **6. Run Trading Analysis**
@@ -286,21 +286,21 @@ Running in PAPER TRADING MODE (Safe - Demo Account)
 
 ```bash
 # Health check
-curl http://localhost:8000/health
+curl http://localhost:8009/health
 
 # Get status
-curl http://localhost:8000/api/status
+curl http://localhost:8009/api/status
 
 # Get trades
-curl http://localhost:8000/api/trades?limit=10
+curl http://localhost:8009/api/trades?limit=10
 
 # Get portfolio
-curl http://localhost:8000/api/portfolio
+curl http://localhost:8009/api/portfolio
 ```
 
 ### Test Real-Time Updates
 
-1. Open dashboard at http://localhost:3000
+1. Open dashboard at http://localhost:3009
 2. Run analysis: `python -m cli.main analyze`
 3. Watch metrics update in real-time
 4. Check WebSocket connection indicator
@@ -381,7 +381,7 @@ curl http://localhost:8000/api/portfolio
 │  │ ✓ /api/analytics│ ✓ Trade History  │                          │
 │  │ ✓ /ws/updates   │ ✓ Charts         │                          │
 │  │                 │ ✓ Live Updates   │                          │
-│  │ localhost:8000  │ localhost:3000   │                          │
+│  │ localhost:8009  │ localhost:3009   │                          │
 │  └──────────────────┴──────────────────┘                          │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
@@ -424,7 +424,7 @@ curl http://localhost:8000/api/portfolio
 2. ✅ Run `python -m cli.main analyze` to see terminal dashboard
 3. ✅ Start backend: `python -m uvicorn tradingagents.api.dashboard_api:app ...`
 4. ✅ Start frontend: `cd tradingagents/frontend && npm run dev`
-5. ✅ Open browser: http://localhost:3000
+5. ✅ Open browser: http://localhost:3009
 
 For detailed setup instructions, see [DASHBOARD_SETUP.md](DASHBOARD_SETUP.md)
 

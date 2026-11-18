@@ -306,7 +306,7 @@ function App() {
       {showOfflineBanner && (
         <div className="alert-banner">
           ⚠️ Can't reach the dashboard API. Make sure the backend is running on
-          {' '}<code>localhost:8000</code>. Retrying in the background.
+          {' '}<code>localhost:8009</code>. Retrying in the background.
         </div>
       )}
 

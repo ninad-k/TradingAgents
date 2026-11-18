@@ -8,7 +8,7 @@ import type {
   AnalysisTrace, TokenUsage,
 } from './types'
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8009'
 const WS_BASE = import.meta.env.VITE_WS_BASE ?? API_BASE.replace(/^http/, 'ws')
 
 async function parseResponse<T>(response: Response, label: string): Promise<T> {
